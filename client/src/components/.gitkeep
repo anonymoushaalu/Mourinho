@@ -1,0 +1,2 @@
+Presentational primitives with no business knowledge (Button, Field, Dialog).
+Anything that knows a domain concept belongs in a feature instead.

@@ -1,0 +1,13 @@
+{
+  // Point the editor at the project venv, not the global interpreter.
+  "python.defaultInterpreterPath": "${workspaceFolder}/server/.venv/Scripts/python.exe",
+  "python.analysis.extraPaths": ["${workspaceFolder}/server"],
+
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.codeActionsOnSave": { "source.organizeImports.ruff": "explicit" }
+  },
+  "files.eol": "\n"
+}

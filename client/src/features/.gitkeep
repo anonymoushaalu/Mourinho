@@ -1,0 +1,3 @@
+Vertical feature slices live here: features/<name>/{components,hooks,api,types}.
+A feature owns its UI, data access and types. Cross-feature imports are blocked
+by lint; share via src/lib or lift into src/app.

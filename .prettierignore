@@ -1,0 +1,11 @@
+node_modules
+dist
+.venv
+
+# Stray directory literally named "~", committed by accident before Phase 1.
+# Ignored so formatting never touches it. Safe to delete once confirmed.
+~/
+shared/src/generated
+server
+*.lock
+package-lock.json

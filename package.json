@@ -1,0 +1,26 @@
+{
+  "name": "mourinho",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "client",
+    "shared"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspace client",
+    "build": "npm run build --workspace shared && npm run build --workspace client",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,css,md,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,json,css,md,yml,yaml}\"",
+    "gen:api": "openapi-typescript http://localhost:8000/openapi.json -o shared/src/generated/api.ts"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.4.4",
+    "prettier": "^3.3.3"
+  }
+}
