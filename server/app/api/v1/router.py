@@ -7,8 +7,8 @@ surface of a version is readable in one file.
 
 from fastapi import APIRouter
 
+from app.api.v1.routes import chat
+
 api_router = APIRouter()
 
-# Feature routers are registered here as they are built, e.g.:
-# from app.api.v1.routes import users
-# api_router.include_router(users.router, prefix="/users", tags=["users"])
+api_router.include_router(chat.router, tags=["chat"])

@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     # Explicit allow-list. Wildcards are rejected below.
     cors_origins: list[str] = Field(default_factory=list)
 
+    # Groq API key for knowledge-grounded portfolio responses.
+    groq_api_key: str = Field(min_length=1)
+
+    # Groq model to use (default: openai/gpt-oss-120b)
+    groq_model: str = "openai/gpt-oss-120b"
+
     @property
     def is_production(self) -> bool:
         return self.environment is Environment.PRODUCTION

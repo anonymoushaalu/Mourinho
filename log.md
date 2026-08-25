@@ -4,6 +4,168 @@ Running log of changes made in this repo, updated after every prompt. Newest ent
 
 ---
 
+## 2026-08-25 — Phase 4B: Migrate to Groq API
+
+**Prompt:** Replace Groq provider (free tier). Keep all architecture, frontend, and knowledge grounding intact. Only swap the LLM provider from Gemini to Groq.
+
+**Changes:**
+- Updated `server/pyproject.toml` — replaced `google-generativeai>=0.8.0` with `groq>=0.9.0`
+- Updated `server/app/core/config.py` — replaced `gemini_api_key`/`gemini_model` with `groq_api_key`/`groq_model` (default: `openai/gpt-oss-120b`)
+- Rewrote `server/app/services/llm_service.py`:
+  - Kept `LLMProvider` abstraction (provider-agnostic)
+  - Removed `GeminiProvider`
+  - Created `GroqProvider` using official Groq SDK
+  - Groq's Chat Completions API with `stream=True` for real streaming
+  - Parameters: `temperature=1`, `max_completion_tokens=2048`, `top_p=1`, `reasoning_effort=medium`
+  - Uses ThreadPoolExecutor (Groq SDK is synchronous) to avoid blocking async loop
+  - Proper handling of streaming chunks from Groq
+- Updated `server/app/api/v1/routes/chat.py`:
+  - Changed exception handling from `google.api_core.exceptions` to `groq` (APIError, RateLimitError)
+  - Same error message strategy as before (no provider details exposed)
+- Updated `server/.env.example` — `GROQ_API_KEY=` (pointing to https://console.groq.com/), `GROQ_MODEL=openai/gpt-oss-120b`
+- Updated `server/.env` — local config with Groq variables
+
+**Why Groq:**
+- Free tier with generous limits (fast inference, low latency)
+- Official Python SDK (`groq`) with proper streaming support
+- `openai/gpt-oss-120b` model available on free tier
+- Real token streaming (unlike Gemini which returns full response at once)
+- Superior inference speed compared to Gemini
+- Existing LLMProvider abstraction means swapping was architectural
+
+**No changes to:**
+- Frontend code (realChatTransport, transportFactory, env config)
+- ChatStreamEvent contract (still discriminated union)
+- Mock transport (still available)
+- Portfolio knowledge grounding (system prompt unchanged)
+- Knowledge service (unchanged)
+- Chat UI (unchanged)
+
+**Architecture:**
+```
+Groq Chat Completions (with streaming)
+    ↓
+GroqProvider.stream_response()
+    ↓ (AsyncIterator[str])
+FastAPI endpoint (generates ChatStreamEvent NDJSON)
+    ↓
+frontend realChatTransport (parses discriminated union)
+    ↓
+Avatar + Chat UI
+```
+
+**Verification steps:**
+1. `pip install -e '.[dev]'` in server/ (installs groq>=0.9.0)
+2. Get free API key at https://console.groq.com/
+3. Edit server/.env: replace GROQ_API_KEY placeholder
+4. Start backend: `uvicorn app.main:app --reload --port 8000`
+5. Start frontend: `npm run dev`
+6. Test with all 9+ test cases (documented in PHASE_4B_GROQ_SETUP.md)
+7. Verify no API key in browser console/Network
+8. Test error scenarios (invalid key, rate limit, etc.)
+
+**Known differences from Gemini:**
+- Real streaming (chunks arrive as model generates) vs. Gemini's full response at once
+- `openai/gpt-oss-120b` includes reasoning capabilities (reasoning_effort=medium)
+- Faster inference latency (Groq's selling point)
+- Avatar state transitions happen more smoothly due to real streaming
+
+---
+
+## 2026-08-25 — Phase 4A: Migrate to Google Gemini API (free tier)
+
+**Prompt:** Replace Anthropic Claude with Google's Gemini API free tier. Keep all architecture, frontend, and knowledge grounding intact. Only swap the LLM provider.
+
+**Changes:**
+- Updated `server/pyproject.toml` — replaced `anthropic>=0.38.0` with `google-generativeai>=0.8.0`
+- Updated `server/app/core/config.py` — replaced `anthropic_api_key` with `gemini_api_key` and `gemini_model` (default: `gemini-2.5-flash`)
+- Rewrote `server/app/services/llm_service.py`:
+  - Kept `LLMProvider` abstraction (provider-agnostic)
+  - Removed `ClaudeProvider`
+  - Created `GeminiProvider` — wraps Google's Generative AI SDK
+  - Gemini SDK is sync-only, so responses run in ThreadPoolExecutor to avoid blocking FastAPI's async loop
+  - Converts Gemini's full response to word-by-word yielding (simulates streaming for frontend compatibility)
+  - Updated `get_llm_provider()` factory to use GeminiProvider
+- Updated `server/app/api/v1/routes/chat.py`:
+  - Changed exception handling from `anthropic.APIError` to `google.api_core.exceptions.GoogleAPIError`
+  - Added `TooManyRequests` handling — returns friendly "temporarily unavailable" message instead of raw API error
+- Updated `server/.env.example` — `GEMINI_API_KEY=` (pointing to https://ai.google.dev/), `GEMINI_MODEL=gemini-2.5-flash`
+- Updated `server/.env` — local config with Gemini variables
+
+**Why Gemini:**
+- Free tier with generous limits (60 requests/minute, suitable for dev/small projects)
+- No paid API required; get key at https://ai.google.dev/ (instant)
+- gemini-2.5-flash is fast and capable for portfolio Q&A
+- Google's official Python SDK (`google-generativeai`) is well-documented
+- Existing LLMProvider abstraction means swapping was architectural, not a major rewrite
+
+**No changes to:**
+- Frontend code (realChatTransport, transportFactory, env config)
+- ChatStreamEvent contract (still discriminated union with chunk/actions/done/error)
+- Mock transport (still available via VITE_USE_MOCK_TRANSPORT=true)
+- Portfolio knowledge grounding (system prompt unchanged)
+- Knowledge service (still uses same PortfolioKnowledge dataclass)
+- Chat UI (unchanged)
+
+**Verification steps:**
+1. `pip install -e '.[dev]'` in server/ (installs google-generativeai)
+2. Get free API key at https://ai.google.dev/
+3. Edit server/.env: replace GEMINI_API_KEY placeholder
+4. Start backend: `uvicorn app.main:app --reload --port 8000`
+5. Start frontend: `npm run dev`
+6. Test with all 6 example questions
+7. Verify no API key in browser console/Network tab
+8. Test error scenarios (invalid key, rate limit, etc.)
+
+**Known limitations:**
+- Gemini SDK is synchronous; we use ThreadPoolExecutor to avoid blocking (not ideal for very high concurrency, but fine for portfolio chatbot)
+- Gemini returns full response at once; frontend sees it as streamed word-by-word (not true token streaming like Claude)
+- Free tier has rate limits (60 req/min); if exceeded, user sees "temporarily unavailable"
+- System prompt is sent with every request (no caching); production might optimize this
+
+---
+
+## 2026-08-25 — Phase 4: Real AI backend architecture
+
+**Prompt:** Design and implement the real backend for The Gaffer using Python + FastAPI + Claude API. Keep the mock transport available. Support streaming responses. Ground all claims in portfolio knowledge (no hallucination). Maintain the existing frontend unchanged except for transport swapping.
+
+**Backend changes:**
+- Updated `server/pyproject.toml` — added `anthropic>=0.38.0` and `python-dotenv>=1.0.0` dependencies
+- Updated `server/.env.example` — added `ANTHROPIC_API_KEY` variable with guidance
+- Updated `server/app/core/config.py` — added `anthropic_api_key: str` field to Settings
+- Created `server/app/schemas/chat.py` — request/response schemas matching frontend's ChatTransport contract (ChatRequest, NavigationAction, ChatChunk, ChatNavigationActions, ChatDone, ChatError, discriminated ChatStreamEvent union)
+- Created `server/app/services/llm_service.py` — LLMProvider abstraction with ClaudeProvider implementation; supports streaming via Claude's async client; never hardcodes LLM throughout the app, allowing future swaps (Gemini, Grok, etc.)
+- Created `server/app/services/knowledge_service.py` — PortfolioKnowledge dataclass ensuring responses never invent facts; get_gaffer_system_prompt() returns a comprehensive prompt that grounds Claude in documented portfolio facts (projects, achievements, education, skills) and explicitly marks missing categories (experience, internships, AI work) as "not documented"
+- Created `server/app/api/v1/routes/chat.py` — POST /api/v1/chat endpoint with streaming; yields NDJSON events matching ChatStreamEvent shape; handles Claude API errors gracefully
+- Updated `server/app/api/v1/router.py` — included chat router in v1 API surface
+- Created `server/.env` — local development config with placeholder API key (never commit real key)
+
+**Frontend changes:**
+- Created `client/src/lib/chat/realChatTransport.ts` — real ChatTransport that calls backend's /api/v1/chat via fetch; streams NDJSON; parses ChatStreamEvent discriminated union; handles network errors, abort, and malformed responses gracefully
+- Updated `client/src/config/env.ts` — made VITE_API_BASE_URL allow empty string (dev proxy), added VITE_USE_MOCK_TRANSPORT flag for choosing transport
+- Updated `client/src/lib/chat/transportFactory.ts` — getChatTransport() now switches between realChatTransport (default) and mockChatTransport (if VITE_USE_MOCK_TRANSPORT=true)
+
+**Architecture decisions:**
+- LLM provider abstraction (ClaudeProvider) allows swapping providers without touching routing or knowledge layers
+- System prompt embeds portfolio knowledge directly (no separate retrieval service yet) — ensures grounding and clarity for Claude's reasoning
+- Streaming via NDJSON over HTTP (not WebSocket) — simpler, works through proxies, matches frontend's AsyncIterable contract
+- Frontend mock transport remains functional — allows testing UI without backend, or switching for debugging
+- Backend never exposes stack traces or implementation details to the browser
+- Portfolio knowledge duplication (frontend TypeScript + backend Python) is acknowledged; production might share a data source, but Phase 4 prioritizes simplicity and backend independence
+
+**Verification steps still needed:**
+1. Server dependencies installed (`pip install -e '.[dev]'` or similar)
+2. ANTHROPIC_API_KEY configured in server/.env
+3. Backend runs on http://localhost:8000 (uvicorn app.main:app --reload)
+4. Frontend runs on http://localhost:5173
+5. Test all 6 example questions through real backend
+6. Verify avatar state transitions (thinking → speaking → complete → idle)
+7. Confirm no API key exposure in browser console/network tab
+8. Test error scenarios: backend down, API key invalid, timeout
+9. Verify mock transport still works when VITE_USE_MOCK_TRANSPORT=true
+
+---
+
 ## 2026-08-20 — Logging setup
 
 **Prompt:** Set up a logger file (`log.md`) that gets updated after every prompt, including file structure and related context.

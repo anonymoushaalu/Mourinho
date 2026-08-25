@@ -15,7 +15,9 @@ function required(name: string, value: string | undefined): string {
 }
 
 export const env = {
-  apiBaseUrl: required('VITE_API_BASE_URL', import.meta.env.VITE_API_BASE_URL),
+  // Empty string means "same-origin via Vite proxy in dev, same-origin in prod"
+  apiBaseUrl: import.meta.env.VITE_API_BASE_URL ?? '',
   environment: import.meta.env.MODE,
   isProduction: import.meta.env.PROD,
+  useMockTransport: import.meta.env.VITE_USE_MOCK_TRANSPORT === 'true',
 } as const;
