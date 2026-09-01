@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 
 import { useMediaQuery } from '@/hooks/useMediaQuery';
-import { AVATAR_STATE_LABEL } from '@/lib/avatarStatus';
+import { AVATAR_STATE_GLOW_GRADIENT as GLOW_GRADIENT, AVATAR_STATE_GLOW_OPACITY as GLOW_OPACITY, AVATAR_STATE_LABEL } from '@/lib/avatarStatus';
 import { cn } from '@/lib/cn';
 import type { AvatarImplementationProps, AvatarState } from '@/types';
 
@@ -12,24 +12,6 @@ const ORB_ANIMATION: Record<AvatarState, { scale: number[]; duration: number; re
   speaking: { scale: [1, 1.08, 1], duration: 0.5, repeat: true },
   success: { scale: [1, 1.12, 1], duration: 0.5, repeat: false },
   error: { scale: [1, 0.96, 1], duration: 0.4, repeat: false },
-};
-
-const GLOW_OPACITY: Record<AvatarState, number> = {
-  idle: 0.3,
-  listening: 0.5,
-  thinking: 0.55,
-  speaking: 0.8,
-  success: 0.7,
-  error: 0.6,
-};
-
-const GLOW_GRADIENT: Record<AvatarState, string> = {
-  idle: 'from-sky-400 via-indigo-500 to-violet-600',
-  listening: 'from-sky-400 via-indigo-500 to-violet-600',
-  thinking: 'from-sky-400 via-indigo-500 to-violet-600',
-  speaking: 'from-sky-400 via-indigo-500 to-violet-600',
-  success: 'from-emerald-400 via-emerald-500 to-teal-500',
-  error: 'from-rose-400 via-red-500 to-rose-600',
 };
 
 /**

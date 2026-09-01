@@ -7,13 +7,6 @@
  * than at the first network call.
  */
 
-function required(name: string, value: string | undefined): string {
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
-
 export const env = {
   // Empty string means "same-origin via Vite proxy in dev, same-origin in prod"
   apiBaseUrl: import.meta.env.VITE_API_BASE_URL ?? '',

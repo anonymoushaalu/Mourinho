@@ -4,6 +4,55 @@ Running log of changes made in this repo, updated after every prompt. Newest ent
 
 ---
 
+## 2026-08-25 — Phase 5A: Real 3D Gaffer avatar (Three.js + React Three Fiber)
+
+**Prompt:** Replace the CSS/Framer-Motion placeholder avatar with a real chest-up 3D avatar rendered from the Blender-exported `MOU.glb`, using Three.js + React Three Fiber + drei, wired into the existing `AvatarRenderer` swap boundary. No chat/backend/knowledge changes. No facial animation, lip-sync, or Blender/Three.js work beyond this.
+
+**Discovery (binary-parsed the GLB directly, not assumed):**
+- `MOU.glb` (repo root, 5.6MB) is a full-body rigged humanoid (82 nodes, Mixamo-style skeleton, 8 SkinnedMeshes/1 skin), not a pre-cropped bust — chest-up framing had to come from camera positioning, not the asset itself
+- 12 baked animation clips ship in the file, named almost 1:1 with `AvatarState` (`Avatar_Idle`, `Avatar_Listening`, `Avatar_Thinking`, `Avatar_Explaining`, `Avatar_TalkingGesture`, `Avatar_Success`, `Avatar_Waiting`, plus `Avatar_Navigate_Left/Right`, `Avatar_Saccade`, `Avatar_Blink`, `Avatar_Blink_Lashes`)
+- The 10 body clips animate bone transforms only; the 2 blink clips animate morph/blendshape weights only — clean, verified split between "not facial animation" (played) and "facial animation" (skipped, out of scope)
+- Verified independently: rest pose ≠ clip base pose (`LeftArm` rest rotation ~13° from identity vs. ~82° at the first keyframe of `Avatar_Idle`) — confirms a real T-pose-flash risk on first mount if no clip is applied before paint
+- Character faces +Z (confirmed via eye-bone position, nose geometry, shoe mesh depth) — camera placed at positive Z, no guessing
+- No embedded camera or lights in the GLB — both built from scratch in R3F
+- No Draco/Meshopt compression (confirmed via `extensionsUsed`) — plain `useGLTF()` works with no extra loader config
+
+**Dependencies added** (React-18-compatible majors, load-bearing pins — latest npm tags require React 19):
+- `@react-three/fiber@^8.18.0`, `@react-three/drei@^9.122.0`, `three@^0.170.0`
+- Verified clean peer tree via `npm ls` — single `react@18.3.1`, single `three@0.170.0`, no unmet peers
+
+**Files created:**
+- `client/public/models/gaffer-avatar.glb` — copy of `MOU.glb` (original left at repo root, same convention as the resume PDF)
+- `client/src/components/avatar/three/avatarClips.ts` — `AvatarState → clip` map; `speaking` deliberately maps to `Avatar_TalkingGesture` not `Avatar_Explaining` (the latter animates the forearm/hand, which sit below the chest-up frame and would be invisible); `error` maps to `Avatar_Waiting` + red rim tint (no literal "error" clip exists)
+- `client/src/components/avatar/three/AvatarModel.tsx` — loads via `useGLTF`, clones via `SkeletonUtils.clone` (not `Object3D.clone()` — meshes share one skeleton), owns the crossfade state machine, guards against the T-pose flash (first activation applies the pose at full weight via `mixer.update(0)` in `useLayoutEffect`, never a fade-in)
+- `client/src/components/avatar/three/useChestUpCamera.ts` — computes camera fov/position/target once at runtime from measured `Head`/`Neck`/`Spine1` bone world positions (not hardcoded constants) — robust to a future re-export at a different scale
+- `client/src/components/avatar/three/StudioEnvironment.tsx` — PMREM env map from three's bundled `RoomEnvironment` (deliberately not drei's CDN-fetching `<Environment preset>`, to avoid a network dependency/offline failure mode)
+- `client/src/components/avatar/three/ThreeAvatarRenderer.tsx` — Canvas, three-point lighting (hemisphere ambient + warm key + cool fill + state-colored rim point light), circular medallion mask, halo, WebGL context-loss watcher
+- `client/src/components/avatar/AvatarErrorBoundary.tsx` — local class-based boundary scoped to the avatar only, so a GLB/WebGL failure degrades to the placeholder instead of taking down the whole chat widget
+
+**Files modified:**
+- `client/src/components/avatar/AvatarRenderer.tsx` — now `lazy()` + `Suspense` + `AvatarErrorBoundary` around `ThreeAvatarRenderer`, with `AvatarPlaceholder` as both the loading and error fallback (same element instance for both, so the two states are pixel-identical)
+- `client/src/lib/avatarStatus.ts` — added `AVATAR_STATE_GLOW_GRADIENT`/`AVATAR_STATE_GLOW_OPACITY` (moved from `AvatarPlaceholder`, zero behavior change) plus new `AVATAR_STATE_ACCENT_HEX`/`AVATAR_STATE_RIM_INTENSITY` for the 3D rim light
+- `client/src/components/avatar/AvatarPlaceholder.tsx` — imports the moved maps instead of defining them locally
+- `client/package.json` — three new dependencies
+- `client/src/config/env.ts` — removed a dead `required()` helper left over from Phase 4A (blocked typecheck)
+- `client/src/lib/chat/realChatTransport.ts` — fixed a pre-existing `noUncheckedIndexedAccess` gap in the NDJSON line-parsing loop (blocked typecheck)
+
+**Verified (headless Chromium via Playwright, screenshots inspected):**
+- Cold load: placeholder briefly, then the 3D portrait, no T-pose flash, no layout shift
+- Framing: correctly chest-up, head near top with headroom, face frontal and well-lit, materials read with proper specular (not flat/plasticky) thanks to the env map
+- All state transitions (idle/thinking/speaking/success/error) — halo and rim-light color change per state; error state shows the intended red tint
+- 6 viewports (375/390/768/1024/1280/1440px) — zero horizontal overflow, zero console errors at any width
+- `prefers-reduced-motion` — no continuous motion, but poses visibly differ between states (validates the non-zero `freezeAt` design, since all clips share an identical frame-0 pose)
+- GLB-missing fallback test — placeholder renders, chat stays fully functional, top-level `ErrorBoundary` does NOT fire (confirmed via DOM check), `AvatarErrorBoundary` correctly logs and recovers
+- 22x open/close cycle churn test — zero errors, exactly one canvas element afterward, no WebGL context-loss warnings
+- Dark mode — medallion backdrop keeps the face legible against `dark:bg-slate-900`
+- `npm run typecheck` / `npm run lint` / `npm run build` all clean; confirmed via `dist/assets/` that three/fiber/drei landed in their own lazy chunk (238KB gzip), not the entry chunk (94KB gzip)
+
+**Known/accepted limitation:** in the deliberately-broken-GLB test only, a handful of `pageerror` (unhandled promise rejection) events surface alongside the correctly-caught React error — traced to `three`'s `GLTFLoader` promise-rejection handling, not fixable from application code without a disproportionate global `unhandledrejection` suppressor. Removed a redundant module-scope `useGLTF.preload()` call that was one source of this, but the remaining noise is upstream library behavior in an edge case (a missing production asset) that doesn't affect the real, verified-clean happy path.
+
+---
+
 ## 2026-08-25 — Phase 4B: Migrate to Groq API
 
 **Prompt:** Replace Groq provider (free tier). Keep all architecture, frontend, and knowledge grounding intact. Only swap the LLM provider from Gemini to Groq.

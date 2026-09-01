@@ -74,7 +74,7 @@ export const realChatTransport: ChatTransport = {
           buffer = lines[lines.length - 1] || '';
 
           for (let i = 0; i < lines.length - 1; i += 1) {
-            const line = lines[i];
+            const line = lines[i] ?? '';
             if (!line.trim()) continue;
 
             try {
