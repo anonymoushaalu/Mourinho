@@ -4,6 +4,35 @@ Running log of changes made in this repo, updated after every prompt. Newest ent
 
 ---
 
+## 2026-09-20 — Phase 6A: Voice output (text-to-speech)
+
+**Prompt:** Commit and push the frontend work, then start Phase A of the roadmap: TTS voice output, with a speaker toggle so The Gaffer talks back.
+
+**Discovery that reshaped the plan:** the originally-assumed model, `playai-tts`, has been **decommissioned server-side** by Groq — confirmed via a live API call (`model_decommissioned` error), even though the installed SDK's own type hints still list it as valid. Queried `client.models.list()` live to find the actual replacement: Canopy Labs' **`canopylabs/orpheus-v1-english`**. That model then turned out to need its *own* separate terms acceptance (distinct from whatever "PlayAI TTS" terms were accepted earlier) — confirmed via another live call returning `model_terms_required`, pointing at a specific console URL. Per the user's choice, built the full backend/frontend against Orpheus's confirmed-correct API shape, with tests using a mocked provider (same pattern as chat/transcription) rather than blocking on that acceptance.
+
+**Consequence:** the actual TTS **voice name** (as opposed to the model id) is genuinely unverified — Groq's voice roster for Orpheus isn't accessible without accepting those terms first, and guessing one risked shipping a confident-looking default that silently fails for an unrelated reason (wrong voice vs. terms-not-accepted are hard to tell apart without a live call). `GROQ_TTS_VOICE` was deliberately left with **no default** (`str | None = None`), scoped so only `/voice/speak` is affected — chat and voice input work fully without it. The route checks this first and returns a clear `speech_not_configured` (503) error rather than a confusing upstream failure.
+
+**Files created:**
+- `server/tests/test_voice_speak.py` — 11 tests. Needed a `tts_configured` fixture using FastAPI's `dependency_overrides` to get past the "not configured" check for tests that need to reach the (mocked) provider — the session-scoped `settings` fixture in `conftest.py` doesn't actually reach route-level `Depends(get_settings)` calls (a pre-existing characteristic noted here, not fixed — out of scope)
+- `client/src/hooks/useVoiceOutput.ts` — fetches and plays TTS audio via `HTMLAudioElement` + `URL.createObjectURL`. Applies the same discipline the Phase 5E audit established on the recording side: an `abortController`-per-request pattern (new `speak()` call aborts any in-flight one), and `releaseAudio()` on stop/unmount/error that revokes the object URL and clears the audio element — the exact class of leak the audit found and fixed for `MediaStream`, applied proactively here rather than waiting for another audit to catch it later
+
+**Files modified:**
+- `server/app/core/config.py` — `groq_tts_model` (defaults to the verified Orpheus id), `groq_tts_voice` (no default, see above)
+- `server/app/core/errors.py` — `SpeechServiceError` (502, upstream failure) and `SpeechNotConfiguredError` (503, deploy/config gap) — kept distinct since the caller can't fix a 503 by retrying
+- `server/app/schemas/voice.py` — `SpeakRequest { text }`, capped at 2000 chars (matches `ChatRequest.content`'s existing limit; the real Orpheus limit is unverified, so this is a defensive client-side cap, not a claimed authoritative one)
+- `server/app/services/voice_service.py` — added `SpeechProvider`/`GroqSpeechProvider`/`get_speech_provider` alongside the existing `VoiceProvider` (STT), kept as a separate interface rather than merged — genuinely different capabilities that share a domain and a vendor, not one capability with two methods
+- `server/app/api/v1/routes/voice.py` — `POST /voice/speak`, returns raw `audio/mpeg` bytes (not JSON — avoids ~33% base64 overhead, directly usable by an `<audio>` element), maps `RateLimitError`/`BadRequestError`/`APIError` the same way the other two voice/chat routes do
+- `server/.env.example`, `docs/environment.md` — documented `GROQ_TTS_MODEL`/`GROQ_TTS_VOICE`, including the terms-acceptance link
+- `client/src/lib/voice/voiceTransport.ts` — added `speakText()`, same discriminated-result shape as `transcribeAudio()`; success path reads `response.blob()` instead of `.json()` since only the error path is JSON here
+- `client/src/components/GafferWidget.tsx` — composes `useVoiceOutput` (it's UI-agnostic, doesn't know about chat messages) and owns the one effect that decides *when* to call `speak()`: on a newly-completed assistant message, only while enabled, tracked via a `lastSpokenMessageIdRef` so re-renders don't re-speak. `react-hooks/exhaustive-deps` flagged my first attempt at hand-picking dependencies (`voiceOutput.enabled`/`voiceOutput.speak`) and wanted the whole `voiceOutput` object instead — deferred to the linter rather than fighting it, since the effect's own ref-guard already makes any extra re-runs a no-op
+- `client/src/components/chat/ChatWidget.tsx`, `ChatPanel.tsx` — threaded `voiceOutput` through; added a speaker/mute toggle in the header (`Volume2`/`VolumeX`, `aria-pressed`), **off by default** so audio never starts unprompted, plus an error banner matching `ChatInput`'s existing voice-error style
+
+**Verification:** 40/40 backend tests passing (29 existing + 11 new), ruff/mypy at the established baseline (one new `B008` matching the same pattern the other three routes already have, zero other new findings). Backend contract verified live via direct `curl` calls (503 for unconfigured, 422 for empty text, all 5 routes present in `/openapi.json`) — a real, structured HTTP check, not a guess. Frontend: typecheck/lint/build all clean.
+
+**Not verified this session:** a live browser check of the toggle/error-banner rendering and actual audio playback. Two independent Playwright/Chromium installs on this machine turned out broken (a stale `node_modules/playwright` missing its entry point in one location; a version-mismatched cached install with no downloaded browser binary in another) and a background reinstall attempt stalled with no output. Given the backend is verified at the HTTP contract level and the frontend JSX is simple, direct conditional rendering (no state-machine complexity outside the already-reasoned-through hook), relied on typecheck/lint/build plus manual code review instead of forcing a screenshot. Real end-to-end audio playback also still needs `GROQ_TTS_VOICE` set, which needs the Orpheus terms accepted first.
+
+---
+
 ## 2026-09-20 — Phase 5E: Architecture and security audit
 
 **Prompt:** Full audit of the newly-implemented chatbot (frontend/backend separation, Groq key security, API contracts, error handling, race conditions, accessibility, mobile, typing, tests, docs). Fix only concrete issues found; no unrelated refactoring. Run all existing validation commands.

@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 
 import { AvatarButton } from '@/components/avatar/AvatarButton';
 import { ChatPanel } from '@/components/chat/ChatPanel';
+import type { UseVoiceOutputResult } from '@/hooks/useVoiceOutput';
 import type { AvatarState, ChatMessage } from '@/types';
 
 /**
@@ -18,6 +19,7 @@ export interface GafferSessionProps {
   isBusy: boolean;
   sendMessage: (text: string) => void;
   setInputActive: (active: boolean) => void;
+  voiceOutput: UseVoiceOutputResult;
 }
 
 /**

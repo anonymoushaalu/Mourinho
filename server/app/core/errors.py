@@ -59,6 +59,19 @@ class TranscriptionServiceError(AppError):
     code = "transcription_error"
 
 
+class SpeechServiceError(AppError):
+    status_code = status.HTTP_502_BAD_GATEWAY
+    code = "speech_error"
+
+
+class SpeechNotConfiguredError(AppError):
+    """Distinct from SpeechServiceError: this is a deploy/config gap, not an
+    upstream API failure -- the caller can't fix it by retrying or rephrasing."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    code = "speech_not_configured"
+
+
 def _body(code: str, message: str, details: Any = None) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "code": code,

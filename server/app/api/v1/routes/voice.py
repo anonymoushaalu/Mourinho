@@ -1,19 +1,23 @@
-"""The Gaffer voice endpoint — speech-to-text via Groq Whisper.
-
-Text-to-speech is deliberately out of scope here; see the voice service's
-`VoiceProvider` interface for where it would extend to.
+"""The Gaffer voice endpoints — speech-to-text via Groq Whisper, and
+text-to-speech via Groq's Orpheus model.
 """
 
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Response, UploadFile
 from groq import APIError, BadRequestError, RateLimitError
 
 from app.core.config import Settings, get_settings
-from app.core.errors import InvalidAudioError, RateLimitedError, TranscriptionServiceError
-from app.schemas.voice import TranscribeResponse
-from app.services.voice_service import get_voice_provider
+from app.core.errors import (
+    InvalidAudioError,
+    RateLimitedError,
+    SpeechNotConfiguredError,
+    SpeechServiceError,
+    TranscriptionServiceError,
+)
+from app.schemas.voice import SpeakRequest, TranscribeResponse
+from app.services.voice_service import get_speech_provider, get_voice_provider
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -93,3 +97,39 @@ async def transcribe(
         )
 
     return TranscribeResponse(text=text.strip())
+
+
+@router.post("/voice/speak")
+async def speak(request: SpeakRequest, settings: Settings = Depends(get_settings)) -> Response:
+    """Synthesize speech audio for The Gaffer to say aloud.
+
+    Request body: { "text": "..." }
+    Response: raw audio bytes, Content-Type: audio/mpeg
+    """
+    if not settings.groq_tts_voice:
+        raise SpeechNotConfiguredError("Voice output isn't configured on this server yet.")
+
+    speech_provider = get_speech_provider(settings)
+
+    try:
+        audio_bytes = await speech_provider.synthesize(request.text)
+    except RateLimitError as exc:
+        logger.warning("Rate limited by Groq API during speech synthesis")
+        raise RateLimitedError(
+            "I'm temporarily unavailable. Please try again in a little while."
+        ) from exc
+    except BadRequestError as exc:
+        logger.exception("Groq rejected the speech synthesis request")
+        raise SpeechServiceError(
+            "The Gaffer couldn't speak that response. Please try again."
+        ) from exc
+    except APIError as exc:
+        logger.exception("Groq API error during speech synthesis")
+        raise SpeechServiceError(
+            "The Gaffer couldn't speak that response. Please try again."
+        ) from exc
+
+    if len(audio_bytes) == 0:
+        raise SpeechServiceError("The Gaffer couldn't speak that response. Please try again.")
+
+    return Response(content=audio_bytes, media_type="audio/mpeg")

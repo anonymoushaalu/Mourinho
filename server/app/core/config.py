@@ -52,6 +52,20 @@ class Settings(BaseSettings):
     # optimized for low-latency transcription of short browser recordings).
     groq_whisper_model: str = "whisper-large-v3-turbo"
 
+    # Groq text-to-speech model. `playai-tts` was decommissioned server-side
+    # (confirmed live, 2026-09-20); this is its current replacement.
+    groq_tts_model: str = "canopylabs/orpheus-v1-english"
+
+    # Voice name for TTS -- deliberately no default. The Orpheus voice roster
+    # is unverified as of this writing: the model requires its own terms
+    # acceptance (separate from other Groq models) at
+    # https://console.groq.com/playground?model=canopylabs%2Forpheus-v1-english,
+    # and Groq's TTS docs page (console.groq.com/docs/text-to-speech) lists
+    # the current valid voice names once that's done. `/voice/speak` returns
+    # a clear "not configured" error until this is set -- chat and
+    # transcription are unaffected either way, since neither depends on it.
+    groq_tts_voice: str | None = None
+
     @property
     def is_production(self) -> bool:
         return self.environment is Environment.PRODUCTION

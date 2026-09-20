@@ -32,9 +32,11 @@ Because values are baked in at build time, each environment needs its own build.
 | `LOG_LEVEL`     | Root log level.                                                 |
 | `SECRET_KEY`    | Signing key, min 32 chars. No default — must be supplied.       |
 | `CORS_ORIGINS`  | JSON array of allowed origins. `*` is rejected.                 |
-| `GROQ_API_KEY`  | Groq API key for The Gaffer's chat and voice transcription. No default — must be supplied. Server-side only; never exposed to the client. |
+| `GROQ_API_KEY`  | Groq API key for chat, transcription, and speech. No default — must be supplied. Server-side only; never exposed to the client. |
 | `GROQ_MODEL`    | Groq chat model id. Defaults to `openai/gpt-oss-120b`.          |
 | `GROQ_WHISPER_MODEL` | Groq speech-to-text model id. Defaults to `whisper-large-v3-turbo`. |
+| `GROQ_TTS_MODEL` | Groq text-to-speech model id. Defaults to `canopylabs/orpheus-v1-english`. Requires its own terms acceptance in the Groq console, separate from the API key. |
+| `GROQ_TTS_VOICE` | Voice name for TTS. No default — `/voice/speak` returns a clear error until set; chat and voice input work without it. See `server/.env.example` for the console link and docs page. |
 
 Generate a key:
 

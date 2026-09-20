@@ -102,6 +102,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/voice/speak": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Speak
+         * @description Synthesize speech audio for The Gaffer to say aloud.
+         *
+         *     Request body: { "text": "..." }
+         *     Response: raw audio bytes, Content-Type: audio/mpeg
+         */
+        post: operations["speak_api_v1_voice_speak_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -181,6 +204,18 @@ export interface components {
             version: string;
             /** Environment */
             environment: string;
+        };
+        /**
+         * SpeakRequest
+         * @description Text for The Gaffer to speak aloud.
+         *
+         *     `max_length` is a defensive client-side cap (matches `ChatRequest.content`'s
+         *     existing limit) -- the actual upstream Orpheus/Groq limit is unverified as
+         *     of this writing; Groq's own validation is the final word regardless.
+         */
+        SpeakRequest: {
+            /** Text */
+            text: string;
         };
         /**
          * TranscribeResponse
@@ -318,6 +353,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TranscribeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    speak_api_v1_voice_speak_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpeakRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
