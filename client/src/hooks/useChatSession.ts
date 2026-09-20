@@ -21,6 +21,9 @@ type ChatSessionAction =
 
 const initialState: ChatSessionState = { messages: [], inputActive: false };
 
+/** Backend caps `history` at 40 entries (`ChatCompletionRequest.history`); mirrored here so a long conversation degrades to "recent context only" instead of a 422. */
+const MAX_HISTORY_TURNS = 40;
+
 function chatReducer(state: ChatSessionState, action: ChatSessionAction): ChatSessionState {
   switch (action.type) {
     case 'SEND_MESSAGE': {
@@ -105,12 +108,20 @@ export function useChatSession(transport: ChatTransport = getChatTransport()) {
       const controller = new AbortController();
       abortControllerRef.current = controller;
 
+      // `state` here is last render's value -- captured before SEND_MESSAGE's
+      // dispatch below is reflected -- which is exactly the prior turns this
+      // new message needs as context, with nothing from this turn included yet.
+      const history = state.messages
+        .filter((m) => m.status === 'complete' && m.content.length > 0)
+        .slice(-MAX_HISTORY_TURNS)
+        .map((m) => ({ role: m.role, content: m.content }));
+
       const userMessageId = crypto.randomUUID();
       const assistantMessageId = crypto.randomUUID();
       dispatch({ type: 'SEND_MESSAGE', userMessageId, assistantMessageId, text: trimmed });
 
       try {
-        for await (const event of transport.send({ role: 'user', content: trimmed }, controller.signal)) {
+        for await (const event of transport.send({ role: 'user', content: trimmed }, history, controller.signal)) {
           switch (event.type) {
             case 'chunk':
               dispatch({ type: 'APPEND_CHUNK', messageId: assistantMessageId, delta: event.delta });
@@ -137,7 +148,7 @@ export function useChatSession(transport: ChatTransport = getChatTransport()) {
         }
       }
     },
-    [transport],
+    [transport, state.messages],
   );
 
   const setInputActive = useCallback((active: boolean) => {

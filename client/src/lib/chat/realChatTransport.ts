@@ -1,21 +1,43 @@
+import type { ApiError, components } from '@mourinho/shared';
+
 import { env } from '@/config/env';
-import type { ChatStreamEvent, ChatTransport, ChatTransportMessage } from '@/types/chat-transport';
+import type {
+  ChatStreamEvent,
+  ChatTransport,
+  ChatTransportHistoryTurn,
+  ChatTransportMessage,
+} from '@/types/chat-transport';
+
+type ChatCompletionRequest = components['schemas']['ChatCompletionRequest'];
+type ChatCompletionResponse = components['schemas']['ChatCompletionResponse'];
 
 /**
- * Real `ChatTransport` that calls the backend's /api/v1/chat endpoint.
- * Streams NDJSON (newline-delimited JSON) events matching ChatStreamEvent.
+ * Real `ChatTransport` that calls the backend's non-streaming
+ * /api/v1/chat/complete endpoint, sending the prior conversation as
+ * `history` so The Gaffer has real multi-turn memory (the streaming
+ * /api/v1/chat endpoint intentionally stays untouched -- see
+ * `server/app/api/v1/routes/chat.py` -- and remains stateless per-turn).
  *
- * The backend streams grounded responses using Claude, ensuring every claim
- * traces back to Jabez's portfolio knowledge — never inventing facts.
+ * The endpoint itself doesn't stream, but `ChatTransport.send()` still
+ * returns an `AsyncIterable<ChatStreamEvent>` -- this yields the full reply
+ * as a single `chunk`, then `done`, so `useChatSession`'s reducer and every
+ * UI component downstream (typing indicator, streaming cursor) work exactly
+ * as they did against the streaming transport, unmodified.
  */
 export const realChatTransport: ChatTransport = {
   async *send(
     message: ChatTransportMessage,
+    history: ChatTransportHistoryTurn[],
     signal: AbortSignal,
   ): AsyncIterable<ChatStreamEvent> {
-    const apiUrl = `${env.apiBaseUrl}/api/v1/chat`;
+    const apiUrl = `${env.apiBaseUrl}/api/v1/chat/complete`;
 
-    let response: Response | null = null;
+    const body: ChatCompletionRequest = {
+      content: message.content,
+      history,
+    };
+
+    let response: Response;
 
     try {
       response = await fetch(apiUrl, {
@@ -23,73 +45,10 @@ export const realChatTransport: ChatTransport = {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ content: message.content }),
+        body: JSON.stringify(body),
         signal,
       });
-
-      if (!response.ok) {
-        yield {
-          type: 'error',
-          error: {
-            code: 'api_error',
-            message: `Backend error: ${response.status} ${response.statusText}`,
-          },
-        };
-        return;
-      }
-
-      if (!response.body) {
-        yield {
-          type: 'error',
-          error: {
-            code: 'no_response_body',
-            message: 'Backend returned no response body.',
-          },
-        };
-        return;
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-
-          if (done) {
-            // Drain any remaining buffered line
-            if (buffer.trim()) {
-              const event = JSON.parse(buffer) as ChatStreamEvent;
-              yield event;
-            }
-            break;
-          }
-
-          // Decode chunk and append to buffer
-          buffer += decoder.decode(value, { stream: true });
-
-          // Split on newlines and process complete lines
-          const lines = buffer.split('\n');
-          buffer = lines[lines.length - 1] || '';
-
-          for (let i = 0; i < lines.length - 1; i += 1) {
-            const line = lines[i] ?? '';
-            if (!line.trim()) continue;
-
-            try {
-              const event = JSON.parse(line) as ChatStreamEvent;
-              yield event;
-            } catch (e) {
-              console.error('Failed to parse NDJSON line:', line, e);
-            }
-          }
-        }
-      } finally {
-        reader.releaseLock();
-      }
     } catch (e) {
-      // Network error, abort, or parsing failure
       if (e instanceof DOMException && e.name === 'AbortError') {
         // Request was cancelled by the user; don't emit an error
         return;
@@ -102,6 +61,57 @@ export const realChatTransport: ChatTransport = {
           message: `Failed to reach the backend: ${e instanceof Error ? e.message : String(e)}`,
         },
       };
+      return;
     }
+
+    if (!response.ok) {
+      const apiError = await parseApiError(response);
+      yield {
+        type: 'error',
+        error: apiError ?? {
+          code: 'api_error',
+          message: `Backend error: ${response.status} ${response.statusText}`,
+        },
+      };
+      return;
+    }
+
+    let payload: ChatCompletionResponse;
+    try {
+      payload = (await response.json()) as ChatCompletionResponse;
+    } catch (e) {
+      yield {
+        type: 'error',
+        error: {
+          code: 'invalid_response',
+          message: `Backend returned an unreadable response: ${e instanceof Error ? e.message : String(e)}`,
+        },
+      };
+      return;
+    }
+
+    yield { type: 'chunk', delta: payload.message.content };
+    yield { type: 'done', messageId: payload.messageId };
   },
 };
+
+/** Parses the backend's uniform error envelope; returns null if the body doesn't match it. */
+async function parseApiError(response: Response): Promise<ApiError | null> {
+  try {
+    const body: unknown = await response.json();
+    if (
+      body !== null &&
+      typeof body === 'object' &&
+      'code' in body &&
+      'message' in body &&
+      typeof body.code === 'string' &&
+      typeof body.message === 'string'
+    ) {
+      const requestId = 'requestId' in body && typeof body.requestId === 'string' ? body.requestId : '';
+      return { code: body.code, message: body.message, requestId };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}

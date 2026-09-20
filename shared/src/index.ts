@@ -6,5 +6,6 @@
  * runtime library — it must stay a pure, dependency-free type/constant layer.
  */
 export * from './constants.js';
+export * from './generated/api.js';
 export * from './types/api.js';
 export * from './types/domain.js';

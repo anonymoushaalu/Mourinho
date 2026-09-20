@@ -1,5 +1,10 @@
 import { answerFromKnowledge } from '@/lib/chat/knowledgeReplies';
-import type { ChatStreamEvent, ChatTransport, ChatTransportMessage } from '@/types/chat-transport';
+import type {
+  ChatStreamEvent,
+  ChatTransport,
+  ChatTransportHistoryTurn,
+  ChatTransportMessage,
+} from '@/types/chat-transport';
 
 /** Resolves after `ms`, or immediately once `signal` aborts — never leaves a dangling timer. */
 function wait(ms: number, signal: AbortSignal): Promise<void> {
@@ -22,7 +27,13 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
  * exists. `getChatTransport` is the only place that should import this.
  */
 export const mockChatTransport: ChatTransport = {
-  async *send(message: ChatTransportMessage, signal: AbortSignal): AsyncIterable<ChatStreamEvent> {
+  async *send(
+    message: ChatTransportMessage,
+    history: ChatTransportHistoryTurn[],
+    signal: AbortSignal,
+  ): AsyncIterable<ChatStreamEvent> {
+    // Canned responses don't need conversation context.
+    void history;
     await wait(500, signal);
     if (signal.aborted) return;
 
