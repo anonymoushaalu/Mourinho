@@ -7,9 +7,11 @@ without touching routing, knowledge grounding, or error handling.
 
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
+from typing import cast
 
 from groq import Groq
+from groq.types.chat import ChatCompletionMessageParam
 
 from app.core.config import Settings
 
@@ -31,6 +33,25 @@ class LLMProvider(ABC):
 
         Yields:
             Text chunks, one per yield.
+
+        Raises:
+            Provider-specific errors on failure.
+        """
+        ...
+
+    @abstractmethod
+    async def complete(self, system_prompt: str, messages: list[dict[str, str]]) -> str:
+        """Return a single, non-streaming completion over a full message history.
+
+        Args:
+            system_prompt: System instructions for the model.
+            messages: Prior conversation turns plus the latest one, each a
+                plain `{"role": ..., "content": ...}` dict -- the service
+                layer stays free of HTTP/wire schema types, per the project's
+                layering rule.
+
+        Returns:
+            The assistant's reply text.
 
         Raises:
             Provider-specific errors on failure.
@@ -101,6 +122,47 @@ class GroqProvider(LLMProvider):
         except Exception as e:
             logger.exception("Groq API error during response generation")
             # Let the caller handle this
+            raise
+
+    async def complete(self, system_prompt: str, messages: list[dict[str, str]]) -> str:
+        """Return a single, non-streaming completion from Groq.
+
+        Same thread-pool-offload pattern as `stream_response`: the Groq SDK
+        call is synchronous, so it runs off the async event loop.
+        """
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _call_groq_sync() -> str:
+            full_messages: list[dict[str, str]] = [
+                {"role": "system", "content": system_prompt},
+                *messages,
+            ]
+
+            response = self.client.chat.completions.create(
+                model=self.model,
+                # The SDK's overloads expect its own ChatCompletionMessageParam
+                # union, not a plain dict -- the runtime shape is identical
+                # (role/content keys), so this is a type-only cast, no
+                # behavior change.
+                messages=cast(Iterable[ChatCompletionMessageParam], full_messages),
+                temperature=1,
+                max_completion_tokens=2048,
+                top_p=1,
+                reasoning_effort="medium",
+                stream=False,
+            )
+
+            if not response.choices:
+                return ""
+            return response.choices[0].message.content or ""
+
+        try:
+            loop = asyncio.get_event_loop()
+            executor = ThreadPoolExecutor(max_workers=1)
+            return await loop.run_in_executor(executor, _call_groq_sync)
+        except Exception:
+            logger.exception("Groq API error during chat completion")
             raise
 
 

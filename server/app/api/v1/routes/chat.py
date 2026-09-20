@@ -1,4 +1,4 @@
-"""The Gaffer chat endpoint — knowledge-grounded AI responses with streaming."""
+"""The Gaffer chat endpoints — knowledge-grounded AI responses, streaming and single-shot."""
 
 import json
 import logging
@@ -10,7 +10,15 @@ from fastapi.responses import StreamingResponse
 from groq import APIError, RateLimitError
 
 from app.core.config import Settings, get_settings
-from app.schemas.chat import ChatRequest, ChatDone, ChatError
+from app.core.errors import LLMServiceError, RateLimitedError
+from app.schemas.chat import (
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    ChatDone,
+    ChatError,
+    ChatRequest,
+    ConversationMessage,
+)
 from app.services.knowledge_service import get_gaffer_system_prompt
 from app.services.llm_service import get_llm_provider
 
@@ -104,4 +112,46 @@ async def chat(
         headers={
             "Cache-Control": "no-cache",
         },
+    )
+
+
+@router.post("/chat/complete", response_model=ChatCompletionResponse)
+async def chat_complete(
+    request: ChatCompletionRequest, settings: Settings = Depends(get_settings)
+) -> ChatCompletionResponse:
+    """Return The Gaffer's full reply to a visitor's message in one response.
+
+    Unlike `POST /chat` (which streams NDJSON), this is a single non-streaming
+    JSON response, and it accepts prior conversation turns via `history` so
+    multi-turn context reaches the model.
+
+    Request body: { "content": "...", "history": [{"role": "user"|"assistant", "content": "..."}] }
+    Response: { "message": {"role": "assistant", "content": "..."}, "messageId": "..." }
+    """
+    system_prompt = get_gaffer_system_prompt()
+    llm_provider = get_llm_provider(settings)
+
+    messages = [{"role": turn.role, "content": turn.content} for turn in request.history]
+    messages.append({"role": "user", "content": request.content})
+
+    try:
+        reply = await llm_provider.complete(system_prompt, messages)
+    except RateLimitError as exc:
+        logger.warning("Rate limited by Groq API")
+        raise RateLimitedError(
+            "I'm temporarily unavailable. Please try again in a little while."
+        ) from exc
+    except APIError as exc:
+        logger.exception("Groq API error during chat completion")
+        raise LLMServiceError(
+            "The Gaffer encountered an error while thinking. Please try again."
+        ) from exc
+
+    if not reply.strip():
+        logger.error("Groq returned an empty completion")
+        raise LLMServiceError("The Gaffer encountered an error while thinking. Please try again.")
+
+    return ChatCompletionResponse(
+        message=ConversationMessage(role="assistant", content=reply),
+        message_id=str(uuid.uuid4()),
     )

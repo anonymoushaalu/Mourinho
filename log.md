@@ -4,6 +4,100 @@ Running log of changes made in this repo, updated after every prompt. Newest ent
 
 ---
 
+## 2026-09-20 — Phase 5E: Architecture and security audit
+
+**Prompt:** Full audit of the newly-implemented chatbot (frontend/backend separation, Groq key security, API contracts, error handling, race conditions, accessibility, mobile, typing, tests, docs). Fix only concrete issues found; no unrelated refactoring. Run all existing validation commands.
+
+**Security — confirmed clean:** traced every read of `groq_api_key` end to end (`Settings` → provider factories → `Groq(api_key=...)` constructor); no response schema, error path, or log line ever serializes it. Client-side `ImportMetaEnv` only declares `VITE_API_BASE_URL`/`VITE_DEV_API_PROXY_TARGET` — a stray `VITE_GROQ_API_KEY` would fail to typecheck. Searched all of git history for the `gsk_` key prefix: 2 hits, both documentation placeholders, never a real key. `.env`/`.env.local` confirmed gitignored and never tracked.
+
+**Two real race conditions found and fixed** (empirically confirmed via direct same-tick DOM event dispatch, not just theorized — Playwright's own `.click()` helper serializes actions and couldn't reproduce true simultaneity):
+
+1. `useVoiceRecorder.ts`'s `start()` checked React `status` state for re-entrancy, but `status` only updates *after* `await getUserMedia()` resolves — a fast double-click both reads stale `'idle'` and passes the guard. Confirmed: two `getUserMedia()` calls fire, the second overwrites `streamRef.current`, orphaning the first `MediaStream` (mic left open, tracks never stopped). **Fix:** synchronous `startingRef` lock, set before the `await`.
+2. `ChatInput.tsx`'s `submit()` had the same class of bug — its duplicate-submission guard relied on the parent's `disabled` prop, which also only updates one render later. Confirmed: two same-tick Enter presses fired two `/chat/complete` requests, rendered two duplicate user bubbles, and left the first assistant bubble **permanently stuck on the typing indicator** (its request gets silently aborted by the second's abort-on-resend logic). **Fix:** synchronous `submittingRef` lock, cleared via `queueMicrotask` once `disabled` takes over.
+
+Both fixes re-verified empirically after the change: 1 request/1 bubble/0 stuck indicators (was 2/2/1); 1 `getUserMedia()` call (was 2).
+
+**One accessibility gap fixed:** voice recording/transcribing state changes were visible only via placeholder text and icon swap — not announced to screen readers. Added a visually-hidden `role="status" aria-live="polite"` region, mirroring the existing `AvatarStatus` convention exactly.
+
+**Also verified, no changes needed:** shared types have zero drift (regenerated `api.ts` from the live backend, byte-identical to committed version); avatar/3D code completely untouched (empty `git diff` across the whole `avatar/` dir); TTS confirmed absent everywhere; no duplicate `Settings`/router/config systems; `MediaRecorder.stop()` double-invocation tested directly — Chromium handles it safely (no throw, `onstop` fires once), no fix needed; mobile 375px width — no overflow.
+
+**Findings reported but deliberately not fixed** (pre-existing, not introduced by this session's work, or would require touching "preserve existing endpoints" territory):
+- Streaming `/chat` route hand-serializes `message_id` (snake_case) but the frontend's `ChatStreamEvent` type expects `messageId` — a latent contract bug from Phase 4B. Currently harmless: `realChatTransport.ts` calls `/chat/complete` exclusively now, so the streaming route is effectively dead code from the frontend's perspective. Worth a decision later: fix the format or deprecate the endpoint.
+- Streaming route's inline error events lack `requestId` (unlike the uniform `AppError` envelope) — inherent to `StreamingResponse` not supporting FastAPI's exception-handler machinery.
+- Pre-existing ruff (18) / mypy (9) findings, confined to `knowledge_service.py` and the streaming route — unchanged before/after this audit, confirmed via `git stash` baseline comparison.
+
+**Verification:** `npm run typecheck`/`lint`/`build`, `pytest` (29/29), `ruff`, `mypy` — all run before and after the fixes; identical pre-existing baseline, zero regressions.
+
+**Files changed:** `client/src/hooks/useVoiceRecorder.ts`, `client/src/components/chat/ChatInput.tsx`.
+
+---
+
+## 2026-09-20 — Phase 5D: Voice input frontend (mic button, recording, transcription)
+
+**Prompt:** Add a microphone button to the chat input using browser mic APIs, with clear recording state, editable transcription, permission/unsupported-browser/failure handling, duplicate-submission prevention, encapsulated in a reusable hook. No auto-playback yet, no Groq credentials in the browser.
+
+**Files created:**
+- `client/src/lib/voice/voiceTransport.ts` — calls `POST /api/v1/voice/transcribe`, mirrors `realChatTransport.ts`'s error-parsing shape (uniform envelope `{code, message, requestId}`); returns a discriminated `{ok: true, text} | {ok: false, error}` result rather than throwing, so callers handle every failure mode explicitly
+- `client/src/hooks/useVoiceRecorder.ts` — encapsulates the full `MediaRecorder`/`getUserMedia` lifecycle behind a `status` enum (`idle | recording | transcribing | error`) and a UI-agnostic `onTranscribed(text)` callback; feature-detects `MediaRecorder`/`getUserMedia` once at module scope; distinct user-facing messages per `DOMException.name` (`NotAllowedError`, `NotFoundError`, `NotReadableError`, `SecurityError`); releases the `MediaStream`'s tracks on stop *and* on unmount, so a mid-recording unmount can't leave the mic open
+
+**Files modified:**
+- `client/src/components/chat/ChatInput.tsx` — added a mic `IconButton` next to Send; icon swaps `Mic → Square → Loader2` across states with a pulsing red ring while recording (mirrors `TypingIndicator`'s `framer-motion` pulse pattern); transcription only ever fills the existing textarea (never auto-sends) so the visitor can edit before sending; textarea+Send disabled during recording/transcribing so voice and text can't race
+
+Transcription lands in the *same* textarea `ChatInput` already had — no new input surface, no parallel state to keep in sync with the reducer in `useChatSession`.
+
+**Verified live (Playwright, `--use-fake-device-for-media-stream`):** mic button hidden correctly when unsupported; permission-denial message renders; a full record → stop → transcribe → edit → send cycle works end to end against the real backend; 375px mobile width has no overflow and the mic button stays tappable.
+
+---
+
+## 2026-09-20 — Phase 5C: Voice transcription backend (Groq Whisper)
+
+**Prompt:** Add speech-to-text following the existing FastAPI architecture: dedicated service, `POST` endpoint, typed JSON response, server-side-only Groq key, validated/rejected bad audio, tests, shared types updated if needed. No text-to-speech yet.
+
+**Files created:**
+- `server/app/schemas/voice.py` — `TranscribeResponse { text: str }`, using the `Schema` camelCase base (matching `health.py`'s convention for a non-streaming JSON response, not `chat.py`'s streaming-route `BaseModel` — that file only uses plain `BaseModel` because its NDJSON events are hand-serialized, never through FastAPI's response-model path)
+- `server/app/services/voice_service.py` — `VoiceProvider` ABC + `GroqVoiceProvider`, mirroring `llm_service.py`'s `LLMProvider` pattern exactly (interface, concrete impl, factory); same thread-pool-offload pattern for the synchronous Groq SDK call
+- `server/app/api/v1/routes/voice.py` — `POST /api/v1/voice/transcribe`, multipart/form-data with an `audio` field; validates content-type against an allow-list (`audio/webm`, `audio/ogg`, `audio/wav`, `audio/mp4`, etc. — matched against MediaRecorder's actual output, `;codecs=...` stripped before comparison), rejects empty/oversized (>25MB, Groq's documented limit) files, catches `RateLimitError`/`BadRequestError`/`APIError` and maps each to the uniform error envelope
+- `server/tests/test_voice.py` — 13 tests: happy path, content-type variants, size/empty rejection, all three Groq error classes, empty-transcription guard, API-key-never-leaked check, sanity check that adding this file didn't disturb the existing chat routes
+
+**Files modified:**
+- `server/app/core/config.py` — `groq_whisper_model: str = "whisper-large-v3-turbo"` (reuses the existing `groq_api_key`, no new secret)
+- `server/app/core/errors.py` — `InvalidAudioError` (400) and `TranscriptionServiceError` (502), same one-line subclass pattern as `NotFoundError`/`ConflictError`
+- `server/app/api/v1/router.py` — registered `voice.router`
+- `server/pyproject.toml` — added `python-multipart>=0.0.12` as a real runtime dependency (not dev-only) — FastAPI's `UploadFile`/`File` support requires it, and production traffic needs it too, not just tests
+- `server/.env.example`, `docs/environment.md` — documented `GROQ_WHISPER_MODEL`
+
+**Discovery:** the server venv was missing `groq` and `python-multipart` despite being listed in `pyproject.toml` — `pip install -e ".[dev]"` was stale from before those deps were added. Re-synced.
+
+**Verification:** 29/29 tests passing (16 pre-existing + 13 new), ruff/mypy both at the pre-existing baseline (zero new violations — confirmed via `git stash` diff), live ASGI request confirmed `/api/v1/voice/transcribe` correctly registered alongside the existing routes.
+
+---
+
+## 2026-09-19 — Phase 5B: Non-streaming chat completion with conversation history (`/chat/complete`)
+
+**Prompt:** Backend text chat with Groq: accept a user message *and* conversation history, return a single assistant response, validated request/response, safe failure handling, dedicated service following existing conventions, backend tests. Preserve the existing streaming `/chat` endpoint untouched.
+
+**Key decision (confirmed with the user first):** the existing `/chat` streams NDJSON and takes only a single message — no history. Rather than mutate it, added `/chat/complete` as a *new*, separate, non-streaming endpoint. `/chat` stays exactly as it was.
+
+**Files created:**
+- `server/tests/test_chat_complete.py` — 16 tests. Caught a real bug in the first draft: `monkeypatch.setattr(llm_service, "get_llm_provider", ...)` patched the wrong module — `chat.py`'s `from ... import get_llm_provider` binds a separate name in the route module's own namespace, so the test silently called the *real* Groq API instead of the mock. Fixed by patching `chat_routes.get_llm_provider` (where it's looked up), not the origin module.
+
+**Files modified:**
+- `server/app/schemas/chat.py` — added `ConversationMessage` (`role: "user"|"assistant"`, excludes `"system"` deliberately — the system prompt is always server-injected, never client-suppliable), `ChatCompletionRequest` (`content` + `history`, capped at 40 turns), `ChatCompletionResponse`
+- `server/app/services/llm_service.py` — added `complete()` to `LLMProvider`/`GroqProvider`, non-streaming, same thread-pool pattern as `stream_response()`. Needed a `cast(Iterable[ChatCompletionMessageParam], ...)` at the `.create()` call site to satisfy mypy strict (the SDK's overloads want its own typed union, not a plain `list[dict[str, str]]` — the existing `stream_response()` has the identical, still-unresolved mypy gap; scoped the cast to only the new method rather than touching that pre-existing one)
+- `server/app/api/v1/routes/chat.py` — added `POST /chat/complete`, guards against an empty Groq completion (would otherwise raise an opaque `ValidationError` from `ConversationMessage`'s `min_length=1`)
+- `server/app/core/errors.py` — `RateLimitedError` (429), `LLMServiceError` (502)
+
+**Frontend wiring (confirmed with the user which endpoint to target — chose `/chat/complete` since the requirements never mentioned streaming):**
+- `client/src/types/chat-transport.ts` — widened `ChatTransport.send()` to take a `history` param
+- `client/src/lib/chat/realChatTransport.ts` — rewritten to call `/chat/complete`, yields the single reply as one `chunk` + `done` event so `useChatSession`'s reducer and every downstream UI component (typing indicator, streaming cursor) work unmodified against a non-streaming transport
+- `client/src/lib/chat/mockChatTransport.ts` — signature updated to match (history unused, canned responses)
+- `client/src/hooks/useChatSession.ts` — computes history from `state.messages` (capped at 40, filtered to `status === 'complete'`); had to add `state.messages` to `sendMessage`'s `useCallback` deps, since it now reads `state` inside the closure — a real bug caught before shipping, not just a lint nit
+- `shared/src/index.ts` — re-exports `./generated/api.js`; discovered `npm run gen:api`'s output had *never* been wired into the package's public surface, so it was unreachable from client code despite existing on disk since Phase 4B
+
+**Verification:** typecheck/lint/build clean; live end-to-end Playwright test against the real backend confirmed genuine multi-turn memory (a follow-up "What about his GitHub?" correctly resolved using turn-1 context); ruff/mypy at pre-existing baseline.
+
+---
+
 ## 2026-08-25 — Phase 5A: Real 3D Gaffer avatar (Three.js + React Three Fiber)
 
 **Prompt:** Replace the CSS/Framer-Motion placeholder avatar with a real chest-up 3D avatar rendered from the Blender-exported `MOU.glb`, using Three.js + React Three Fiber + drei, wired into the existing `AvatarRenderer` swap boundary. No chat/backend/knowledge changes. No facial animation, lip-sync, or Blender/Three.js work beyond this.

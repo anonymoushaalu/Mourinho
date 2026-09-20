@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.base import Schema
+
 
 class ChatRequest(BaseModel):
     """A visitor's question for The Gaffer.
@@ -57,3 +59,34 @@ class ChatError(BaseModel):
 
 # Discriminated union matching the frontend's ChatStreamEvent.
 ChatStreamEvent = ChatChunk | ChatNavigationActions | ChatDone | ChatError
+
+
+class ConversationMessage(Schema):
+    """One turn in a conversation, either from the visitor or The Gaffer.
+
+    `system` is deliberately excluded: the system prompt is always injected
+    server-side from `knowledge_service`, never client-supplied.
+    """
+
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=4000)
+
+
+class ChatCompletionRequest(Schema):
+    """A visitor's message plus prior conversation turns.
+
+    Used by the non-streaming `/chat/complete` endpoint. Unlike `ChatRequest`
+    (the streaming `/chat` endpoint), this carries the full conversation so
+    multi-turn context reaches the model. `history` is capped to bound both
+    the request payload and the token cost of each completion.
+    """
+
+    content: str = Field(..., min_length=1, max_length=2000)
+    history: list[ConversationMessage] = Field(default_factory=list, max_length=40)
+
+
+class ChatCompletionResponse(Schema):
+    """The Gaffer's reply to a `ChatCompletionRequest`."""
+
+    message: ConversationMessage
+    message_id: str

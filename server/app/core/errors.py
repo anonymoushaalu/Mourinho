@@ -39,6 +39,26 @@ class ConflictError(AppError):
     code = "conflict"
 
 
+class RateLimitedError(AppError):
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    code = "rate_limit"
+
+
+class LLMServiceError(AppError):
+    status_code = status.HTTP_502_BAD_GATEWAY
+    code = "llm_error"
+
+
+class InvalidAudioError(AppError):
+    status_code = status.HTTP_400_BAD_REQUEST
+    code = "invalid_audio"
+
+
+class TranscriptionServiceError(AppError):
+    status_code = status.HTTP_502_BAD_GATEWAY
+    code = "transcription_error"
+
+
 def _body(code: str, message: str, details: Any = None) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "code": code,

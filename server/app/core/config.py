@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     # Groq model to use (default: openai/gpt-oss-120b)
     groq_model: str = "openai/gpt-oss-120b"
 
+    # Groq speech-to-text model for voice input (default: whisper-large-v3-turbo,
+    # optimized for low-latency transcription of short browser recordings).
+    groq_whisper_model: str = "whisper-large-v3-turbo"
+
     @property
     def is_production(self) -> bool:
         return self.environment is Environment.PRODUCTION
