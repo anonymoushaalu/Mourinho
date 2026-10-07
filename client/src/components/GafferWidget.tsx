@@ -19,15 +19,26 @@ import { useVoiceOutput } from '@/hooks/useVoiceOutput';
  * and this is the one place that watches `messages` and decides *when* to
  * call it -- speak the newest assistant reply once it completes, but only
  * while voice output is enabled (off by default; audio never starts
- * unprompted).
+ * unprompted). Its `status === 'playing'` also feeds `useAvatarState` as
+ * `isSpeaking`, so the avatar visibly speaks for the actual audio duration,
+ * not just the brief moment a reply finishes arriving.
  */
 export function GafferWidget() {
   const { messages, inputActive, lastMessageStatus, sendMessage, setInputActive } = useChatSession();
-  const avatarState = useAvatarState({ messageStatus: lastMessageStatus, inputActive });
-  const isBusy = avatarState === 'thinking' || avatarState === 'speaking';
-
   const voiceOutput = useVoiceOutput();
   const lastSpokenMessageIdRef = useRef<string | null>(null);
+
+  const avatarState = useAvatarState({
+    messageStatus: lastMessageStatus,
+    inputActive,
+    isSpeaking: voiceOutput.status === 'playing',
+  });
+  // Deliberately NOT derived from avatarState (which now also reads
+  // 'speaking' for the full TTS playback duration -- seconds, not the
+  // near-instant network-bound flash this used to be): a visitor should be
+  // able to type a follow-up while The Gaffer is still talking, not get
+  // locked out of the input for as long as the reply takes to read aloud.
+  const isBusy = lastMessageStatus === 'pending' || lastMessageStatus === 'streaming';
 
   useEffect(() => {
     if (!voiceOutput.enabled) return;

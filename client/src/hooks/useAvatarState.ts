@@ -10,6 +10,16 @@ interface UseAvatarStateParams {
   messageStatus: MessageStatus | null;
   /** Whether the chat input currently has focus. */
   inputActive: boolean;
+  /**
+   * True while TTS audio is actively playing. Takes priority over
+   * everything else, including the success/error flash -- it's the most
+   * literal, most user-visible signal there is: the avatar should look like
+   * it's speaking exactly when audio is coming out of the speakers, not
+   * just for the brief moment `messageStatus` passes through `'streaming'`
+   * (near-instantaneous against the non-streaming /chat/complete endpoint,
+   * and unrelated to how long the spoken reply actually takes to play).
+   */
+  isSpeaking?: boolean;
 }
 
 /**
@@ -23,7 +33,7 @@ interface UseAvatarStateParams {
  * to idle/listening. That's local state + a timer, kept here rather than in
  * the reducer so `useChatSession` doesn't have to know the avatar exists.
  */
-export function useAvatarState({ messageStatus, inputActive }: UseAvatarStateParams): AvatarState {
+export function useAvatarState({ messageStatus, inputActive, isSpeaking = false }: UseAvatarStateParams): AvatarState {
   const [flash, setFlash] = useState<'success' | 'error' | null>(null);
   const prevStatusRef = useRef<MessageStatus | null>(null);
 
@@ -48,6 +58,7 @@ export function useAvatarState({ messageStatus, inputActive }: UseAvatarStatePar
     return undefined;
   }, [messageStatus]);
 
+  if (isSpeaking) return 'speaking';
   if (flash) return flash;
   if (messageStatus === 'pending') return 'thinking';
   if (messageStatus === 'streaming') return 'speaking';

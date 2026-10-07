@@ -4,6 +4,28 @@ Running log of changes made in this repo, updated after every prompt. Newest ent
 
 ---
 
+## 2026-10-07 — Phase 6B: Avatar reacts to voice (TTS playback)
+
+**Prompt:** Phase B of the roadmap -- wire the avatar's `speaking` animation to actual TTS audio playback, not just the chat-message lifecycle.
+
+**The gap:** `useAvatarState` derived `'speaking'` from `messageStatus === 'streaming'` -- a state that's now near-instantaneous, since `realChatTransport` yields the entire reply as a single chunk against the non-streaming `/chat/complete` endpoint. By the time TTS audio actually starts playing (after the separate `/voice/speak` fetch resolves), `messageStatus` has already moved on to `'complete'`. The avatar had no signal at all for "audio is actively coming out of the speakers right now."
+
+**Fix:** added an `isSpeaking` param to `useAvatarState`, fed from `voiceOutput.status === 'playing'` in `GafferWidget`, given top priority over the flash/messageStatus derivation (it's the most literal, most user-visible signal there is). Both avatar renderers needed zero changes -- `AvatarModel.tsx`'s `speaking` clip already uses `LoopRepeat` and `AvatarPlaceholder.tsx`'s pulse animation already uses `repeat: true`/`Infinity`; both were already built to sustain a state for however long it lasts, not hardcoded to the old brief flash. The entire gap was the missing signal, not missing animation capability.
+
+**A real design decision surfaced along the way, not just wiring:** `isBusy` (which disables the chat input) used to be derived from `avatarState === 'speaking'`. Left as-is, that would now disable the input for the *entire* TTS playback duration -- seconds, not the old near-instant network flash. Decoupled it: `isBusy` is now derived directly from `messageStatus` (`pending`/`streaming` only), so a visitor can type a follow-up while The Gaffer is still talking, rather than getting locked out for as long as the reply takes to read aloud. Confirmed live (not just by typechecking) that the input re-enables as soon as the reply lands, independent of voice-output state.
+
+**Files modified:**
+- `client/src/hooks/useAvatarState.ts` — added `isSpeaking?: boolean` param, highest-priority branch
+- `client/src/components/GafferWidget.tsx` — reordered hook calls so `voiceOutput` exists before `useAvatarState` needs `voiceOutput.status`; `isBusy` redefined to not depend on `avatarState`
+
+**Verification:** typecheck/lint/build clean. Live Playwright check (after fixing the session's two separate broken-Playwright-install issues -- see below) confirmed: voice toggle defaults off, switches on correctly, input is disabled while thinking and correctly *re-enabled* once the reply completes (the actual behavior change under test), and the `speech_not_configured` error banner renders correctly end-to-end. Avatar correctly shown back at "Idle" after a reply with no real TTS audio to play (expected, since `GROQ_TTS_VOICE` is still unconfigured) -- confirms it doesn't get stuck in a stale `'speaking'` state.
+
+**Tooling note:** this machine had two independently broken Playwright setups blocking live verification across this and the previous phase -- a stale `node_modules/playwright` in the scratchpad missing its entry point, and a version-mismatched cached npx install with no downloaded browser binary (then a second mismatch, `chromium` vs. the specific `chromium-headless-shell` build it actually launches). Resolved by running scripts from the npx cache location that has a real `playwright` package, and installing the exact browser build it requested. Not a code issue, but worth knowing if live verification mysteriously fails again on this machine.
+
+**Not yet done:** real end-to-end audio playback still needs `GROQ_TTS_VOICE` configured (Orpheus terms not yet accepted, per the user's choice last phase).
+
+---
+
 ## 2026-09-20 — Phase 6A: Voice output (text-to-speech)
 
 **Prompt:** Commit and push the frontend work, then start Phase A of the roadmap: TTS voice output, with a speaker toggle so The Gaffer talks back.
