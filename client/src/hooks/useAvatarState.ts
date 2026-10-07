@@ -8,7 +8,7 @@ const ERROR_FLASH_MS = 2200;
 interface UseAvatarStateParams {
   /** Status of the most recent assistant message, or null before the first send / while the last message is the user's. */
   messageStatus: MessageStatus | null;
-  /** Whether the chat input currently has focus. */
+  /** Whether the visitor is actively providing input -- text focus or active mic recording (see `GafferWidget`, which combines both before passing this in). */
   inputActive: boolean;
   /**
    * True while TTS audio is actively playing. Takes priority over

@@ -20,6 +20,7 @@ export function ChatPanel({
   isBusy,
   sendMessage,
   setInputActive,
+  setRecording,
   voiceOutput,
   onClose,
 }: ChatPanelProps) {
@@ -65,7 +66,12 @@ export function ChatPanel({
         <MessageList messages={messages} />
       )}
 
-      <ChatInput onSend={sendMessage} onActiveChange={setInputActive} disabled={isBusy} />
+      <ChatInput
+        onSend={sendMessage}
+        onActiveChange={setInputActive}
+        onRecordingChange={setRecording}
+        disabled={isBusy}
+      />
     </div>
   );
 }

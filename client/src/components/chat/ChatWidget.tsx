@@ -19,6 +19,7 @@ export interface GafferSessionProps {
   isBusy: boolean;
   sendMessage: (text: string) => void;
   setInputActive: (active: boolean) => void;
+  setRecording: (recording: boolean) => void;
   voiceOutput: UseVoiceOutputResult;
 }
 

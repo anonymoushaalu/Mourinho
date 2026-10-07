@@ -15,12 +15,14 @@ const ORB_ANIMATION: Record<AvatarState, { scale: number[]; duration: number; re
 };
 
 /**
- * Gradient-orb stand-in for the real GLB avatar. Kept deliberately simple --
- * a calm, premium "digital assistant" mark rather than a cartoon mascot --
- * so it reads as intentional, not unfinished, while it's the only avatar
- * that exists. Receives `AvatarImplementationProps` (see `AvatarRenderer`);
- * `isActive` isn't consumed yet -- CSS state alone is enough here -- but the
- * field exists now because the future Three.js renderer will need it.
+ * The primary Gaffer avatar for the current milestone (see `AvatarRenderer`
+ * for why this isn't just a 3D-loading fallback anymore). Kept deliberately
+ * simple -- a calm, premium "digital assistant" mark rather than a cartoon
+ * mascot -- with a quiet "G" monogram so it reads as a specific identity,
+ * not an abstract loading spinner. Receives `AvatarImplementationProps`
+ * (see `AvatarRenderer`); `isActive` isn't consumed yet -- CSS state alone
+ * is enough here -- but the field exists for parity with the 3D renderer's
+ * props shape, should that be reconnected later.
  */
 export function AvatarPlaceholder({ state, className }: AvatarImplementationProps) {
   const prefersReducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
@@ -82,7 +84,28 @@ export function AvatarPlaceholder({ state, className }: AvatarImplementationProp
         {...(prefersReducedMotion ? {} : { animate: { scale: orb.scale } })}
         transition={{ duration: orb.duration, repeat: orb.repeat ? Infinity : 0, ease: 'easeInOut' }}
       >
-        <div className={cn('absolute inset-[22%] rounded-full bg-gradient-to-br opacity-90', GLOW_GRADIENT[state])} />
+        <div
+          className={cn(
+            'absolute inset-[22%] flex items-center justify-center rounded-full bg-gradient-to-br opacity-90',
+            GLOW_GRADIENT[state],
+          )}
+        >
+          {/* Quiet identity mark -- "The Gaffer" is a specific presence, not
+              an abstract loading indicator. Deliberately just a letterform,
+              not an icon: matches the "calm, premium" brief above rather
+              than reading as a mascot. Fixed px, not a %/em size: this only
+              ever renders at the app's two real avatar sizes (40px header,
+              64px button) -- a CSS percentage here would resolve against
+              the *inherited* font-size, not the orb's own pixel box, and
+              render as a near-invisible dot regardless of how big the
+              avatar itself is. */}
+          <span
+            aria-hidden="true"
+            className="select-none text-[11px] font-semibold tracking-tight text-white/90"
+          >
+            G
+          </span>
+        </div>
       </motion.div>
     </div>
   );

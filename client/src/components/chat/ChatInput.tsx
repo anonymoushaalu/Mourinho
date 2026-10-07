@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { motion } from 'framer-motion';
 import { Loader2, Mic, Send, Square } from 'lucide-react';
 
@@ -10,10 +10,12 @@ import { cn } from '@/lib/cn';
 interface ChatInputProps {
   onSend: (text: string) => void;
   onActiveChange: (active: boolean) => void;
+  /** Reports mic recording start/stop, so the avatar can reflect it as `listening` -- clicking the mic button doesn't focus the textarea, so `onActiveChange` alone misses this. */
+  onRecordingChange: (isRecording: boolean) => void;
   disabled: boolean;
 }
 
-export function ChatInput({ onSend, onActiveChange, disabled }: ChatInputProps) {
+export function ChatInput({ onSend, onActiveChange, onRecordingChange, disabled }: ChatInputProps) {
   const [value, setValue] = useState('');
   // `disabled` (from the parent, via useAvatarState) only reflects a sent
   // message one render later -- two Enter/click events dispatched in the
@@ -42,6 +44,15 @@ export function ChatInput({ onSend, onActiveChange, disabled }: ChatInputProps) 
   // voice/text operation at a time, so a stray keystroke or click can't fire
   // a duplicate submission alongside it.
   const inputDisabled = disabled || isRecording || isTranscribing;
+
+  useEffect(() => {
+    onRecordingChange(isRecording);
+    // Also fires on every dependency change, not just unmount, but that's a
+    // harmless redundant call (onRecordingChange(false) when already false
+    // is a no-op state update) -- the real purpose is unmounting mid-recording
+    // (e.g. chat panel closed) must not leave the avatar stuck in 'listening'.
+    return () => onRecordingChange(false);
+  }, [isRecording, onRecordingChange]);
 
   function submit() {
     if (inputDisabled || submittingRef.current || value.trim().length === 0) return;

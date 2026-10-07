@@ -4,6 +4,26 @@ Running log of changes made in this repo, updated after every prompt. Newest ent
 
 ---
 
+## 2026-10-07 — Hour 1: AvatarPlaceholder as the primary production avatar
+
+**Prompt:** Make `AvatarPlaceholder` the primary visible Gaffer avatar for this milestone (not a 3D loading fallback), without connecting Blender, modifying the GLB, redesigning the chat UI, or adding dependencies. Minimum changes only; inspect first.
+
+**Inspection found exactly one real functional gap** against the ten stated requirements: `useAvatarState`'s `inputActive` param only ever reflected *textarea focus* (`ChatInput`'s `onFocus`/`onBlur`) — clicking the mic button doesn't focus the textarea, so the avatar never actually showed `listening` while the microphone was recording, despite `AvatarPlaceholder` having a distinct `listening` animation all along. Everything else audited (TTS-duration speaking, thinking-while-awaiting-backend, TTS/voice-input failure isolation, mobile sizing, `prefers-reduced-motion`) was already correctly implemented and verified by tracing the real code paths, not assumed.
+
+**Changes made:**
+- `AvatarRenderer.tsx` — now renders `AvatarPlaceholder` directly; removed the `lazy()`/`Suspense`/`AvatarErrorBoundary`/`ThreeAvatarRenderer` wrapping. All 3D/GLB source files left untouched on disk, just unreferenced -- restoring 3D later is swapping this one component's body back. Confirmed via the build output: the ~889KB `ThreeAvatarRenderer` chunk is gone entirely, module count dropped 2534 → 1956, and zero `<canvas>` elements exist on the page (live-verified).
+- `AvatarPlaceholder.tsx` — added a quiet "G" monogram inside the orb, consistent with the component's own existing "calm, premium... not a cartoon mascot" design philosophy (identity mark, not an icon). **Caught and fixed a sizing bug in my own first attempt**: used a CSS percentage font-size, which resolves against the *inherited* font-size (the page's root ~16px), not the orb's own pixel box — rendered as a near-invisible dot regardless of avatar size. Live screenshot caught it; fixed with a fixed `11px` size (correct and legible at both of the two sizes this component is actually ever rendered at, 40px header / 64px button -- confirmed there are no others).
+- `ChatInput.tsx` — added `onRecordingChange` prop, reported via a `useEffect` watching `isRecording`; the cleanup unconditionally calls `onRecordingChange(false)` so unmounting mid-recording (e.g. chat panel closed) can't leave the avatar stuck in `listening`.
+- `ChatWidget.tsx`, `ChatPanel.tsx` — threaded `setRecording` through `GafferSessionProps`, same pattern already used for `voiceOutput`.
+- `GafferWidget.tsx` — added local `isRecording` state; `useAvatarState` now receives `inputActive || isRecording` (widened, not renamed -- from the hook's perspective it's still just "is the visitor actively providing input").
+- `useAvatarState.ts` — updated the one-line JSDoc on `inputActive` for accuracy; no behavior change to the hook itself.
+
+**Verification:** typecheck/lint/build clean; 40/40 backend tests unaffected (no backend files touched, run as a sanity check per the brief). Live Playwright verification (not just typecheck) confirmed: no canvas/WebGL element present, monogram visible and legible, avatar shows `Listening` *during actual mic recording* (not just text focus) and correctly leaves it when recording stops, `Thinking` appears immediately on send, no horizontal overflow at 375px mobile width, zero console/page errors throughout.
+
+**Remaining issues:** none blocking. The TTS/mic failure-isolation and `prefers-reduced-motion` requirements were already satisfied before this change and weren't re-verified live this pass (traced via code reading only, consistent with "minimum changes" -- no code in those paths was touched). 3D avatar work remains exactly where it was (untouched, dormant, reconnectable).
+
+---
+
 ## 2026-10-07 — Phase 6B: Avatar reacts to voice (TTS playback)
 
 **Prompt:** Phase B of the roadmap -- wire the avatar's `speaking` animation to actual TTS audio playback, not just the chat-message lifecycle.

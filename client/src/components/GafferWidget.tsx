@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { ErrorBoundary } from '@/app/ErrorBoundary';
 import { ChatWidget } from '@/components/chat/ChatWidget';
@@ -27,10 +27,17 @@ export function GafferWidget() {
   const { messages, inputActive, lastMessageStatus, sendMessage, setInputActive } = useChatSession();
   const voiceOutput = useVoiceOutput();
   const lastSpokenMessageIdRef = useRef<string | null>(null);
+  // Clicking the mic button doesn't focus the textarea, so `inputActive`
+  // alone can't tell the avatar "the visitor is actively speaking into the
+  // mic right now" -- this is reported up from ChatInput via setRecording.
+  const [isRecording, setRecording] = useState(false);
 
   const avatarState = useAvatarState({
     messageStatus: lastMessageStatus,
-    inputActive,
+    // Widened, not renamed: from useAvatarState's perspective this is still
+    // just "is the visitor actively providing input" -- text focus and mic
+    // recording are two ways that's true.
+    inputActive: inputActive || isRecording,
     isSpeaking: voiceOutput.status === 'playing',
   });
   // Deliberately NOT derived from avatarState (which now also reads
@@ -63,6 +70,7 @@ export function GafferWidget() {
         isBusy={isBusy}
         sendMessage={(text) => void sendMessage(text)}
         setInputActive={setInputActive}
+        setRecording={setRecording}
         voiceOutput={voiceOutput}
       />
     </ErrorBoundary>
