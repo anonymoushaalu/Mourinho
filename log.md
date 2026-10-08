@@ -4,6 +4,39 @@ Running log of changes made in this repo, updated after every prompt. Newest ent
 
 ---
 
+## 2026-10-08 — Hour 4: API security hardening (rate limiting + request-size protection)
+
+**Prompt:** Protect the three Groq-backed public endpoints (`/chat/complete`, `/voice/transcribe`, `/voice/speak`) with conservative, per-IP rate limiting (different limits per endpoint), request-size protection, and confirm the existing secret/CORS/logging hygiene still holds. No auth, no database, no Blender.
+
+**Two real bugs found and fixed while building this, both only surfaced by actually testing, not by writing the code and assuming it worked:**
+
+1. **`BaseHTTPMiddleware` + raising an exception directly from `dispatch()` doesn't reach the normal exception handlers.** First version of the size-limit middleware raised `PayloadTooLargeError` and expected the existing `@app.exception_handler(AppError)` to catch it, same as every other error in this app. A test immediately proved that wrong: Starlette wraps an exception raised directly from `dispatch()` (as opposed to one propagating up through `call_next()` from a route, which works fine) in an `ExceptionGroup` via its anyio `TaskGroup` machinery, which FastAPI's handler matching doesn't unwrap -- the request fell through to the generic 500 handler instead, logging a full stack trace server-side (never leaked to the client, but still wrong: no `413`, no `payload_too_large`). Fixed by building the `JSONResponse` directly inside the middleware, reusing `errors.py`'s own `_body()` helper so the shape stays byte-for-byte identical to what the normal path would have produced.
+2. **CORS headers were missing from the size-limit rejection entirely.** Root cause: `CORSMiddleware` was registered *before* (meaning more inner than) `RequestSizeMiddleware`, so when the size middleware short-circuited without ever calling `call_next()`, CORS never got invoked for that response at all. A real cross-origin browser would have had the response blocked by its own CORS enforcement, never seeing the clean `413` body underneath. Confirmed via a manual script, fixed by registering `RequestSizeMiddleware` first (innermost) so `CORSMiddleware` wraps its short-circuited responses the same way it wraps a route's. Added a permanent regression test for this, not just a one-off check, since it's exactly the kind of interaction bug that's easy to silently reintroduce.
+
+**Design decisions:**
+- Rate limits are named constants in `app/core/rate_limit.py` (chat 10/min, transcribe 6/min -- heavier, more deliberate action -- speak 10/min, since it's triggered at most once per completed chat reply so never exceeds chat's own rate), not environment variables -- `@limiter.limit(...)` reads its value once at decoration/import time, so making this dynamically env-configurable would need real re-plumbing for a chatbot's rate limits that don't need it; tuning one is a one-line code change, same precedent as `MAX_AUDIO_BYTES`.
+- Per-IP key function trusts the first hop of `X-Forwarded-For` over the raw ASGI connection (slowapi's default `get_remote_address` only uses the latter, which is always the proxy's own address behind any reverse proxy -- Render, Railway, Fly, nginx, all the realistic deployment targets here -- making the limit meaningless without this). Documented, deliberate trade-off: a client that can reach the origin directly could spoof the header to dodge the limit. Proportionate for a public portfolio chatbot, not a defense against a targeted attacker.
+- Request-size protection is one middleware, app-wide (not per-route): checks the *declared* `Content-Length` against a 26MB ceiling (25MB -- the existing `/voice/transcribe` audio cap -- plus multipart overhead headroom) before any body is read, as a fast backstop ahead of each route's own finer-grained checks, which stay exactly as they were. Known, documented gap: a client omitting `Content-Length` and streaming a large chunked body instead bypasses this specific check; the existing route-level checks still catch it after the fact.
+- slowapi's `RateLimitExceeded` is mapped to the exact same `code: "rate_limit"` the app already uses for Groq's own 429s (`RateLimitedError`) -- the frontend needed zero new code, since a client can't tell, and shouldn't need to, whether it was this app's limit or Groq's.
+
+**Files created:**
+- `server/app/core/rate_limit.py` -- `Limiter`, the proxy-aware key function, the three named limit constants
+- `server/app/middleware/request_size.py` -- the Content-Length pre-check middleware
+- `server/tests/test_hardening.py` -- 13 tests: rate limiting (per-endpoint, per-IP isolation, X-Forwarded-For first-hop parsing, cross-endpoint independence, no secret leaks), request-size (JSON and multipart, confirms the new global check and the existing route-level check both still fire correctly and independently), and the CORS regression test above
+
+**Files modified:**
+- `server/app/core/errors.py` -- `PayloadTooLargeError`, a `RateLimitExceeded` handler
+- `server/app/main.py` -- wired the limiter onto `app.state`, registered `RequestSizeMiddleware` with the corrected ordering
+- `server/app/api/v1/routes/chat.py` -- `chat_complete` only (not the legacy streaming `/chat`, deliberately out of this task's scope): renamed its body param `request` → `body` (slowapi requires a parameter literally named `request` of type `Request` to key the limit check), added that `Request` param, added `@limiter.limit(CHAT_RATE_LIMIT)`
+- `server/app/api/v1/routes/voice.py` -- same treatment for `transcribe` (no rename needed, its body param is already `audio`) and `speak` (same rename as chat)
+- `server/tests/conftest.py` -- added an autouse fixture resetting the limiter before every test; without it, request counts from one test leaked into the next, since the limiter is a module-level singleton shared by the one session-scoped `app` every test runs against
+- `server/pyproject.toml` -- added `slowapi`; added a mypy override skipping `deprecated.*` (a transitive dependency via `limits`) -- it ships no `py.typed` marker and its source uses Python 3.12 syntax incompatible with this project's configured `python_version = "3.11"`, a third-party issue, not this app's code
+- `docs/environment.md`, `docs/architecture.md` -- documented the new rate-limiting/size-protection behavior and its known limitations (per-process in-memory state); strengthened the `CORS_ORIGINS` row to explicitly say "this is where the production frontend URL goes" once there is one
+
+**Verified:** 54/54 backend tests pass (41 existing + 13 new), ruff (19) and mypy (9) unchanged from the established baseline -- zero new findings in any of the new or modified files. Live-verified against the real running server, not just mocked tests: a real chat completion still works normally; 11 real requests in a row correctly got exactly one `429` with a clean body; a real 27MB body correctly got a `413` with the voice name/API key confirmed absent from both headers and body; `/health` and the legacy `/chat` (deliberately out of scope) confirmed still completely unprotected and unaffected; operational logs for both rejection types confirmed to contain path/IP/size/endpoint only, never request content.
+
+---
+
 ## 2026-10-08 — Hour 2: TTS production activation
 
 **Prompt:** `GROQ_TTS_VOICE` is now configured. Verify `POST /api/v1/voice/speak` end to end, add/update tests for configured/unconfigured/Groq-failure/success, run pytest/typecheck/lint/build. No voice-architecture redesign, no Blender.

@@ -15,7 +15,9 @@ from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging
+from app.core.rate_limit import limiter
 from app.middleware.request_id import RequestIdMiddleware
+from app.middleware.request_size import RequestSizeMiddleware
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -36,9 +38,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
         openapi_url=None if settings.is_production else "/openapi.json",
     )
+    app.state.limiter = limiter
 
-    # Middleware is LIFO: registered last runs first. RequestIdMiddleware is
-    # registered last so a request id exists before anything else can log.
+    # Middleware is LIFO: registered last runs first and wraps everything
+    # registered before it -- including that earlier middleware's own
+    # short-circuited responses, not just normal route responses.
+    #
+    # RequestSizeMiddleware can reject a request directly, without ever
+    # calling `call_next()` -- confirmed (via a failing test, not assumed)
+    # that when it's registered *outside* CORSMiddleware, CORS never runs for
+    # that rejection at all, and a real cross-origin browser request gets a
+    # response with no Access-Control-Allow-Origin header, which the browser
+    # then blocks before the frontend ever sees the clean 413 body. So
+    # RequestSizeMiddleware is registered first (innermost): CORS needs to be
+    # able to wrap its short-circuited responses, same as it wraps a route's.
+    #
+    # RequestIdMiddleware is registered last (outermost) so a request id
+    # exists before anything else -- including CORS and RequestSizeMiddleware
+    # -- can log or build an error body.
+    app.add_middleware(RequestSizeMiddleware)
     if settings.cors_origins:
         app.add_middleware(
             CORSMiddleware,

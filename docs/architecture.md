@@ -66,6 +66,13 @@ code.
 same-origin. CORS is configured for real deployments only, with an explicit
 origin allow-list; wildcards are rejected by a validator.
 
+**Conservative abuse protection, not auth.** The three Groq-backed endpoints
+(`/chat/complete`, `/voice/transcribe`, `/voice/speak`) are rate-limited per IP
+and every request is capped by declared size before any parsing -- enough to
+absorb casual abuse and accidental cost on a public, unauthenticated portfolio
+chatbot, not a defense against a determined, distributed attacker. See
+`docs/environment.md`'s "Rate limiting and request-size protection" section.
+
 ## What Phase 1 deliberately omits
 
 Database, auth, and containerisation are absent because each has a real choice

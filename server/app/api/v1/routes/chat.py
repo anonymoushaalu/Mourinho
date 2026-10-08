@@ -5,12 +5,13 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from groq import APIError, RateLimitError
 
 from app.core.config import Settings, get_settings
 from app.core.errors import LLMServiceError, RateLimitedError
+from app.core.rate_limit import CHAT_RATE_LIMIT, limiter
 from app.schemas.chat import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -26,9 +27,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def generate_stream(
-    user_message: str, settings: Settings
-) -> Any:
+async def generate_stream(user_message: str, settings: Settings) -> Any:
     """Generate streaming response events for a visitor's question.
 
     Yields NDJSON (newline-delimited JSON) matching the frontend's
@@ -41,16 +40,22 @@ async def generate_stream(
     try:
         async for text_chunk in llm_provider.stream_response(system_prompt, user_message):
             # Yield each text chunk as a { type: 'chunk', delta: '...' } line
-            yield json.dumps(
-                {"type": "chunk", "delta": text_chunk},
-                separators=(",", ":"),
-            ).encode() + b"\n"
+            yield (
+                json.dumps(
+                    {"type": "chunk", "delta": text_chunk},
+                    separators=(",", ":"),
+                ).encode()
+                + b"\n"
+            )
 
         # End-of-response marker
-        yield json.dumps(
-            {"type": "done", "message_id": message_id},
-            separators=(",", ":"),
-        ).encode() + b"\n"
+        yield (
+            json.dumps(
+                {"type": "done", "message_id": message_id},
+                separators=(",", ":"),
+            ).encode()
+            + b"\n"
+        )
 
     except RateLimitError:
         logger.warning("Rate limited by Groq API")
@@ -102,9 +107,7 @@ async def chat(
     (idle → listening → thinking → speaking → complete → idle).
     """
     if not request.content.strip():
-        raise HTTPException(
-            status_code=400, detail="Message content cannot be empty"
-        )
+        raise HTTPException(status_code=400, detail="Message content cannot be empty")
 
     return StreamingResponse(
         generate_stream(request.content, settings),
@@ -116,8 +119,9 @@ async def chat(
 
 
 @router.post("/chat/complete", response_model=ChatCompletionResponse)
+@limiter.limit(CHAT_RATE_LIMIT)
 async def chat_complete(
-    request: ChatCompletionRequest, settings: Settings = Depends(get_settings)
+    request: Request, body: ChatCompletionRequest, settings: Settings = Depends(get_settings)
 ) -> ChatCompletionResponse:
     """Return The Gaffer's full reply to a visitor's message in one response.
 
@@ -127,12 +131,17 @@ async def chat_complete(
 
     Request body: { "content": "...", "history": [{"role": "user"|"assistant", "content": "..."}] }
     Response: { "message": {"role": "assistant", "content": "..."}, "messageId": "..." }
+
+    Rate-limited per IP (see `app.core.rate_limit`); `request: Request` is
+    required by `@limiter.limit` to key the check, not used directly here --
+    the actual request body is `body`, not `request`, to avoid colliding
+    with slowapi's required parameter name.
     """
     system_prompt = get_gaffer_system_prompt()
     llm_provider = get_llm_provider(settings)
 
-    messages = [{"role": turn.role, "content": turn.content} for turn in request.history]
-    messages.append({"role": "user", "content": request.content})
+    messages = [{"role": turn.role, "content": turn.content} for turn in body.history]
+    messages.append({"role": "user", "content": body.content})
 
     try:
         reply = await llm_provider.complete(system_prompt, messages)

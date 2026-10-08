@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
 
 from app.core.context import request_id_var
 
@@ -72,6 +73,11 @@ class SpeechNotConfiguredError(AppError):
     code = "speech_not_configured"
 
 
+class PayloadTooLargeError(AppError):
+    status_code = status.HTTP_413_CONTENT_TOO_LARGE
+    code = "payload_too_large"
+
+
 def _body(code: str, message: str, details: Any = None) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "code": code,
@@ -96,6 +102,19 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content=_body("validation_error", "Request validation failed", exc.errors()),
+        )
+
+    @app.exception_handler(RateLimitExceeded)
+    async def _rate_limit_exceeded(_: Request, exc: RateLimitExceeded) -> JSONResponse:
+        # Same code ("rate_limit") Groq's own 429s already use (RateLimitedError,
+        # raised from the route layer when Groq itself rate-limits us) -- the
+        # frontend needs no new handling for this; a client can't tell, and
+        # shouldn't need to, whether it was our limit or Groq's.
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content=_body(
+                "rate_limit", "Too many requests. Please slow down and try again shortly."
+            ),
         )
 
     @app.exception_handler(Exception)

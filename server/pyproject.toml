@@ -15,6 +15,9 @@ dependencies = [
     # Required by FastAPI to parse multipart/form-data -- the voice endpoint
     # accepts audio as an UploadFile, which is multipart, not JSON.
     "python-multipart>=0.0.12",
+    # Per-IP rate limiting on the Groq-backed endpoints. In-memory storage by
+    # default -- no Redis/external store needed, matching "no database".
+    "slowapi>=0.1.9",
 ]
 
 [project.optional-dependencies]
@@ -77,6 +80,15 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+# `deprecated` (a transitive dependency of slowapi -> limits) ships no
+# py.typed marker, so mypy falls back to reading its source directly --
+# which uses a Python 3.12 `type` statement, incompatible with this
+# project's python_version = "3.11". Not our code; skip checking it rather
+# than following imports into a third-party package we don't control.
+module = "deprecated.*"
+follow_imports = "skip"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -5,7 +5,7 @@ text-to-speech via Groq's Orpheus model.
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Request, Response, UploadFile
 from groq import APIError, BadRequestError, RateLimitError
 
 from app.core.config import Settings, get_settings
@@ -16,6 +16,7 @@ from app.core.errors import (
     SpeechServiceError,
     TranscriptionServiceError,
 )
+from app.core.rate_limit import SPEAK_RATE_LIMIT, TRANSCRIBE_RATE_LIMIT, limiter
 from app.schemas.voice import SpeakRequest, TranscribeResponse
 from app.services.voice_service import get_speech_provider, get_voice_provider
 
@@ -46,7 +47,9 @@ ALLOWED_CONTENT_TYPES = frozenset(
 
 
 @router.post("/voice/transcribe", response_model=TranscribeResponse)
+@limiter.limit(TRANSCRIBE_RATE_LIMIT)
 async def transcribe(
+    request: Request,
     audio: Annotated[UploadFile, File(description="Recorded audio to transcribe.")],
     settings: Settings = Depends(get_settings),
 ) -> TranscribeResponse:
@@ -54,6 +57,11 @@ async def transcribe(
 
     Request: multipart/form-data with an `audio` file field.
     Response: { "text": "..." }
+
+    Rate-limited per IP (see `app.core.rate_limit`); `request: Request` is
+    required by `@limiter.limit` to key the check and isn't otherwise used
+    here -- no name collision to avoid, unlike `chat_complete`/`speak`,
+    since this route's own body param is `audio`, not `request`.
     """
     content_type = (audio.content_type or "").split(";")[0].strip().lower()
     if content_type not in ALLOWED_CONTENT_TYPES:
@@ -100,7 +108,10 @@ async def transcribe(
 
 
 @router.post("/voice/speak")
-async def speak(request: SpeakRequest, settings: Settings = Depends(get_settings)) -> Response:
+@limiter.limit(SPEAK_RATE_LIMIT)
+async def speak(
+    request: Request, body: SpeakRequest, settings: Settings = Depends(get_settings)
+) -> Response:
     """Synthesize speech audio for The Gaffer to say aloud.
 
     Request body: { "text": "..." }
@@ -108,6 +119,11 @@ async def speak(request: SpeakRequest, settings: Settings = Depends(get_settings
 
     Not audio/mpeg: Groq's Orpheus model only accepts `response_format="wav"`
     (confirmed live) -- see `GroqSpeechProvider.synthesize`.
+
+    Rate-limited per IP (see `app.core.rate_limit`); `request: Request` is
+    required by `@limiter.limit` to key the check, not used directly here --
+    the actual request body is `body`, not `request`, to avoid colliding
+    with slowapi's required parameter name.
     """
     if not settings.groq_tts_voice:
         raise SpeechNotConfiguredError("Voice output isn't configured on this server yet.")
@@ -115,7 +131,7 @@ async def speak(request: SpeakRequest, settings: Settings = Depends(get_settings
     speech_provider = get_speech_provider(settings)
 
     try:
-        audio_bytes = await speech_provider.synthesize(request.text)
+        audio_bytes = await speech_provider.synthesize(body.text)
     except RateLimitError as exc:
         logger.warning("Rate limited by Groq API during speech synthesis")
         raise RateLimitedError(

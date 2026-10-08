@@ -31,7 +31,7 @@ Because values are baked in at build time, each environment needs its own build.
 | `ENVIRONMENT`   | `local` \| `staging` \| `production`. Gates `/docs`.            |
 | `LOG_LEVEL`     | Root log level.                                                 |
 | `SECRET_KEY`    | Signing key, min 32 chars. No default — must be supplied.       |
-| `CORS_ORIGINS`  | JSON array of allowed origins. `*` is rejected.                 |
+| `CORS_ORIGINS`  | JSON array of allowed origins. `*` is rejected. **This is where the production frontend's URL goes** once it has one — never hardcoded in source; empty by default (no CORS middleware registered at all, not "permissive") until set. |
 | `GROQ_API_KEY`  | Groq API key for chat, transcription, and speech. No default — must be supplied. Server-side only; never exposed to the client. |
 | `GROQ_MODEL`    | Groq chat model id. Defaults to `openai/gpt-oss-120b`.          |
 | `GROQ_WHISPER_MODEL` | Groq speech-to-text model id. Defaults to `whisper-large-v3-turbo`. |
@@ -45,6 +45,23 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
 Get a free Groq API key at https://console.groq.com/
+
+## Rate limiting and request-size protection
+
+`/api/v1/chat/complete`, `/api/v1/voice/transcribe`, and `/api/v1/voice/speak`
+are rate-limited per IP (named constants in `app/core/rate_limit.py`, not
+environment variables — tuning one is a one-line code change, the same as
+`MAX_AUDIO_BYTES` in `app/api/v1/routes/voice.py`). Per-IP keying trusts the
+first hop of `X-Forwarded-For` over the raw connection, which only works
+correctly behind a reverse proxy that sets that header (Render, Railway, Fly,
+nginx, etc. all do by default). A request whose declared `Content-Length`
+exceeds 26MB is rejected before any parsing, app-wide.
+
+Both use in-memory state — no Redis or other store needed, matching "no
+database" — with one real limitation: it's per-process. Running multiple
+worker processes or replicas multiplies the *effective* limit by however many
+there are, since each counts independently. Fine for a single-process
+deployment (the normal case here); worth knowing before scaling out.
 
 ## Adding a variable
 
