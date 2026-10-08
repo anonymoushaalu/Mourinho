@@ -16,7 +16,7 @@ from app.services import voice_service
 class _FakeSpeechProvider(voice_service.SpeechProvider):
     """Stands in for GroqSpeechProvider so tests never call the real Groq API."""
 
-    def __init__(self, audio: bytes = b"fake-mp3-bytes") -> None:
+    def __init__(self, audio: bytes = b"fake-audio-bytes") -> None:
         self._audio = audio
 
     async def synthesize(self, text: str) -> bytes:
@@ -50,12 +50,33 @@ def tts_configured(app: FastAPI, settings: Settings) -> Iterator[None]:
     app.dependency_overrides.pop(get_settings, None)
 
 
+@pytest.fixture
+def tts_not_configured(app: FastAPI, settings: Settings) -> Iterator[None]:
+    """Explicitly overrides `get_settings` so `groq_tts_voice` is `None`.
+
+    The "missing configuration" test below used to rely on the ambient,
+    env-file-backed `get_settings()` happening to have `GROQ_TTS_VOICE`
+    unset -- which broke the moment that variable was actually configured
+    for production (confirmed: the test silently started asserting against
+    a real 200 response instead of the intended 503). Mirrors
+    `tts_configured` above, just forcing the opposite value, so this test's
+    outcome no longer depends on what happens to be in the developer's
+    local `.env`.
+    """
+    unconfigured = settings.model_copy(update={"groq_tts_voice": None})
+    app.dependency_overrides[get_settings] = lambda: unconfigured
+    yield
+    app.dependency_overrides.pop(get_settings, None)
+
+
 async def test_speak_returns_audio(client: AsyncClient, tts_configured: None) -> None:
     response = await client.post("/api/v1/voice/speak", json={"text": "Hello there."})
 
     assert response.status_code == 200
-    assert response.headers["content-type"] == "audio/mpeg"
-    assert response.content == b"fake-mp3-bytes"
+    # wav, not mpeg: confirmed live that Groq's Orpheus model only accepts
+    # response_format="wav" -- see GroqSpeechProvider.synthesize.
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == b"fake-audio-bytes"
 
 
 async def test_speak_rejects_empty_text(client: AsyncClient, tts_configured: None) -> None:
@@ -76,8 +97,9 @@ async def test_speak_rejects_oversized_text(client: AsyncClient, tts_configured:
     assert response.status_code == 422
 
 
-async def test_speak_returns_not_configured_without_voice(client: AsyncClient) -> None:
-    """No `tts_configured` override here -- `groq_tts_voice` defaults to None."""
+async def test_speak_returns_not_configured_without_voice(
+    client: AsyncClient, tts_not_configured: None
+) -> None:
     response = await client.post("/api/v1/voice/speak", json={"text": "Hello."})
 
     assert response.status_code == 503
@@ -158,6 +180,31 @@ async def test_speak_never_exposes_api_key(client: AsyncClient, tts_configured: 
 
     assert b"gsk_" not in response.content
     assert b"test-secret-key" not in response.content
+    # The configured voice NAME is a separate value from the API key -- also
+    # must never reach the client, in the success body or any header.
+    assert b"test-voice" not in response.content
+    assert "test-voice" not in str(response.headers)
+
+
+async def test_speak_never_exposes_api_key_on_failure(
+    client: AsyncClient, tts_configured: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same check, but on a failure response -- the error envelope must be
+    equally clean, not just the success path."""
+
+    class _FailingProvider(voice_service.SpeechProvider):
+        async def synthesize(self, text: str) -> bytes:
+            fake_request = httpx.Request("POST", "https://api.groq.com/v1/audio/speech")
+            raise APIError("Upstream failure", fake_request, body=None)
+
+    monkeypatch.setattr(voice_routes, "get_speech_provider", lambda settings: _FailingProvider())
+
+    response = await client.post("/api/v1/voice/speak", json={"text": "Hello."})
+
+    assert response.status_code == 502
+    assert b"gsk_" not in response.content
+    assert b"test-secret-key" not in response.content
+    assert b"test-voice" not in response.content
 
 
 async def test_existing_endpoints_untouched_by_speak(client: AsyncClient) -> None:

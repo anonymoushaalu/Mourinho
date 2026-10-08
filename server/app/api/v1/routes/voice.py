@@ -104,7 +104,10 @@ async def speak(request: SpeakRequest, settings: Settings = Depends(get_settings
     """Synthesize speech audio for The Gaffer to say aloud.
 
     Request body: { "text": "..." }
-    Response: raw audio bytes, Content-Type: audio/mpeg
+    Response: raw audio bytes, Content-Type: audio/wav
+
+    Not audio/mpeg: Groq's Orpheus model only accepts `response_format="wav"`
+    (confirmed live) -- see `GroqSpeechProvider.synthesize`.
     """
     if not settings.groq_tts_voice:
         raise SpeechNotConfiguredError("Voice output isn't configured on this server yet.")
@@ -132,4 +135,4 @@ async def speak(request: SpeakRequest, settings: Settings = Depends(get_settings
     if len(audio_bytes) == 0:
         raise SpeechServiceError("The Gaffer couldn't speak that response. Please try again.")
 
-    return Response(content=audio_bytes, media_type="audio/mpeg")
+    return Response(content=audio_bytes, media_type="audio/wav")

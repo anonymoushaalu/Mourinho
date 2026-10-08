@@ -118,6 +118,14 @@ class GroqSpeechProvider(SpeechProvider):
         """Synthesize speech via Groq's TTS endpoint.
 
         Same thread-pool-offload pattern as the other providers in this file.
+
+        `response_format="wav"`, not "mp3": confirmed via a live call
+        (2026-10-08) that `canopylabs/orpheus-v1-english` rejects every
+        format except `wav` ('response_format must be one of [wav]'),
+        despite the installed SDK's type hints listing mp3/flac/mulaw/ogg/wav
+        as all valid -- the same category of drift as `playai-tts` being
+        decommissioned while its hints still looked valid. The route layer's
+        declared `media_type` must match this.
         """
         import asyncio
         from concurrent.futures import ThreadPoolExecutor
@@ -127,7 +135,7 @@ class GroqSpeechProvider(SpeechProvider):
                 model=self.model,
                 voice=self.voice,
                 input=text,
-                response_format="mp3",
+                response_format="wav",
             )
             return response.read()
 

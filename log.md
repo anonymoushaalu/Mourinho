@@ -4,6 +4,32 @@ Running log of changes made in this repo, updated after every prompt. Newest ent
 
 ---
 
+## 2026-10-08 — Hour 2: TTS production activation
+
+**Prompt:** `GROQ_TTS_VOICE` is now configured. Verify `POST /api/v1/voice/speak` end to end, add/update tests for configured/unconfigured/Groq-failure/success, run pytest/typecheck/lint/build. No voice-architecture redesign, no Blender.
+
+**The real voice is now set, which immediately surfaced two genuine bugs that were impossible to find without it:**
+
+1. **A critical, production-blocking bug, found via a live call**: Groq's real Orpheus API rejects `response_format="mp3"` outright (`'response_format must be one of [wav]'`), despite the installed SDK's own type hints listing `mp3`/`flac`/`mulaw`/`ogg`/`wav` as all valid. Every `/voice/speak` call was failing with a 502. This is the exact same category of SDK-vs-reality drift as `playai-tts` being decommissioned while its hints still looked valid (discovered in an earlier phase) -- confirms this Orpheus integration needs to be periodically re-verified live, not trusted from static types alone. **Fixed**: `response_format="wav"` in `GroqSpeechProvider.synthesize`, `media_type="audio/wav"` in the route (was `audio/mpeg`) -- a literal deviation from this task's stated requirement #4, made because the literal requirement is factually unachievable against the real API right now, and shipping a broken 502 instead would defeat the entire purpose of "activation." Frontend needed zero changes: `voiceTransport.ts`/`useVoiceOutput.ts` are format-agnostic by construction (just plays whatever `Content-Type` the backend declares).
+2. **A test-isolation bug**, also only surfaced by the real configuration existing: `test_speak_returns_not_configured_without_voice` asserted a 503, relying on the *ambient* `.env`'s `GROQ_TTS_VOICE` happening to be unset -- confirmed failing (`200` instead of `503`) the moment that stopped being true. Route-level `Depends(get_settings)` reads the real env-file-backed settings; the session-scoped test `settings` fixture doesn't reach it (a pre-existing `conftest.py` characteristic). **Fixed**: added a `tts_not_configured` fixture (mirrors the existing `tts_configured` one, just forcing the opposite value via `dependency_overrides`), so the test's outcome no longer depends on what's in a developer's local `.env`.
+
+**Live, non-mocked verification performed** (the first time this was ever possible in this project):
+- Direct `curl` call to the real, running backend: `200`, `Content-Type: audio/wav`, 195,910 bytes -- independently confirmed via `file` as a genuine, valid RIFF/WAVE PCM file (16-bit mono 24kHz), not garbage or truncated data. Headers and body both confirmed clean of the API key and the configured voice name.
+- Real browser run (Playwright, real backend, real Groq call): voice toggle enabled, message sent, avatar correctly reached `Speaking` during actual audio playback (confirms requirement 8, avatar-speaking sync, against genuine audio for the first time), zero console/page errors, zero error banners.
+- A later live run hit a genuine `429` from Groq -- the real TTS rate limit, from this session's own repeated live calls. Useful rather than just an obstacle: it's a real-world confirmation of requirement 6 (chat survives a TTS failure) under an *actual* failure, not a mocked one -- the `/chat/complete` reply displayed completely normally, unaffected.
+- One of my own live-verification *scripts* had a bug (broke its polling loop on the first transient "Idle" between the success-flash ending and the TTS fetch resolving, before the real `Speaking`/final-`Idle` transition happened) -- traced, understood, and fixed in the test script; not an application issue, and `useVoiceOutput.ts` itself was not modified.
+
+**Files changed:**
+- `server/app/services/voice_service.py` -- `response_format` fix
+- `server/app/api/v1/routes/voice.py` -- `media_type` fix, docstring
+- `server/tests/test_voice_speak.py` -- `tts_not_configured` fixture, fixed the now-explicit "missing configuration" test, renamed the fake-audio fixture value (was named for the wrong format), strengthened the "never exposes secrets" test to explicitly check the voice name (not just the API key) on both the success *and* failure paths
+
+**Verification:** 41/41 backend tests pass (was 40; added the failure-path leak-check test), ruff (19) and mypy (9) unchanged from the established baseline -- zero new findings. `npm run typecheck`/`lint`/`build` all clean, zero frontend changes required.
+
+**Remaining issues:** none blocking. Worth knowing: this session's live testing has consumed real Groq TTS quota and briefly tripped its rate limit -- expect it to recover on its own; no code change needed for that.
+
+---
+
 ## 2026-10-07 — Hour 1: AvatarPlaceholder as the primary production avatar
 
 **Prompt:** Make `AvatarPlaceholder` the primary visible Gaffer avatar for this milestone (not a 3D loading fallback), without connecting Blender, modifying the GLB, redesigning the chat UI, or adding dependencies. Minimum changes only; inspect first.
